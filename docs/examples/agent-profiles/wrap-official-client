@@ -1,0 +1,151 @@
+#!/bin/sh
+set -eu
+name=$(basename "$0")
+wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+# Real target binary: our own directory removed from PATH. Needed in every path
+# below, including the early exec-guard.
+old_ifs=$IFS
+IFS=:
+newpath=
+for p in $PATH; do
+  [ "$p" = "$wrapper_dir" ] && continue
+  if [ -z "$newpath" ]; then
+    newpath=$p
+  else
+    newpath=$newpath:$p
+  fi
+done
+IFS=$old_ifs
+
+real=$(PATH="$newpath" command -v "$name" || true)
+if [ -z "$real" ] && [ "$name" = "cursor" ] && [ -x /Applications/Cursor.app/Contents/Resources/app/bin/cursor ]; then
+  real=/Applications/Cursor.app/Contents/Resources/app/bin/cursor
+fi
+if [ -z "$real" ]; then
+  printf 'error: %s not found on PATH\n' "$name" >&2
+  exit 127
+fi
+
+# Already inside a prepared profile session. An outer wrapper set the per-host
+# config variable; it survives into a nested invocation (e.g. a Spartan Bridge
+# reviewer that Bridge spawns from a `cursor-agent` session whose HOME is
+# relocated) even where AGENT_PROFILE_ACTIVE does not, because the Bridge's env
+# allowlist forwards CLAUDE_CONFIG_DIR / CODEX_HOME but not arbitrary markers.
+# Re-resolving the profile from a relocated $HOME is what previously failed with
+# "resolve-profile: No such file or directory". Just exec with the inherited env.
+#
+# For claude and codex, also restore $HOME: their config dir (CLAUDE_CONFIG_DIR
+# / CODEX_HOME) isolates settings, but the CLIs still read login state
+# (~/.claude.json / macOS Keychain, ~/.codex/auth.json) from $HOME. A
+# `cursor-agent` parent relocated $HOME to its isolated cursor-home, which has
+# no such login — the review then exits "Not logged in". This wrapper never
+# relocates $HOME for claude/codex, so restoring it here is a no-op except
+# inside a relocated-HOME session.
+_real_home="${AGENT_PROFILES_REAL_HOME:-$(eval echo ~"${USER:-}")}"
+case "$name" in
+  claude)
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+      HOME=$_real_home
+      export HOME
+      exec "$real" "$@"
+    fi
+    ;;
+  codex)
+    if [ -n "${CODEX_HOME:-}" ]; then
+      HOME=$_real_home
+      export HOME
+      exec "$real" "$@"
+    fi
+    ;;
+  cursor-agent|agent)
+    [ -n "${AGENT_CLI_CREDENTIAL_STORE:-}" ] && [ -n "${AGENT_PROFILES_REAL_HOME:-}" ] && exec "$real" "$@"
+    ;;
+esac
+
+# resolve-profile and the profile roots live beside this wrapper, never under
+# $HOME — a relocated-HOME session must still find them. wrapper_dir is derived
+# from $0, so it is correct regardless of $HOME.
+profiles_root=$(dirname "$wrapper_dir")
+resolve="${AGENT_PROFILES_RESOLVE:-$profiles_root/resolve-profile}"
+profile=$("$resolve" "$PWD")
+
+case "$profile" in
+  [a-z0-9][a-z0-9._-]*) ;;
+  *)
+    printf 'error: invalid profile %s\n' "$profile" >&2
+    exit 1
+    ;;
+esac
+
+base="$profiles_root/$profile"
+real_home="${AGENT_PROFILES_REAL_HOME:-$HOME}"
+export CLAUDE_CONFIG_DIR="$base/claude"
+export CODEX_HOME="$base/codex"
+unset CURSOR_API_KEY
+mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$base/cursor" "$base/cursor-app/extensions" "$base/cursor-home/.cursor"
+
+link_home_dot() {
+  src=$1
+  dest=$2
+  if [ -e "$src" ] && [ ! -e "$dest" ]; then
+    ln -s "$src" "$dest"
+  fi
+}
+
+# Keep login isolated, but reuse the machine's global skill and plugin definitions.
+# Relocating CODEX_HOME is a Bridge concern. Do not change Agent Spartan Protocol
+# to compensate: keep mirroring the protocol's documented skill homes instead.
+mkdir -p "$CLAUDE_CONFIG_DIR/plugins" "$CODEX_HOME/skills"
+link_home_dot "$real_home/.claude/skills" "$CLAUDE_CONFIG_DIR/skills"
+link_home_dot "$real_home/.claude/plugins/cache" "$CLAUDE_CONFIG_DIR/plugins/cache"
+link_home_dot "$real_home/.claude/plugins/installed_plugins.json" "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"
+# Claude can share the whole skills directory. Codex cannot: $CODEX_HOME/skills/.system
+# is created per profile, so only non-dot user skills are linked.
+if [ -d "$real_home/.codex/skills" ]; then
+  for skill in "$real_home/.codex/skills"/*; do
+    [ -e "$skill" ] || continue
+    link_home_dot "$skill" "$CODEX_HOME/skills/$(basename "$skill")"
+  done
+fi
+# Protocol-standard Codex/Cursor install path. Isolated Codex would otherwise
+# miss $spartan after this wrapper sets CODEX_HOME.
+if [ -d "$real_home/.agents/skills" ]; then
+  for skill in "$real_home/.agents/skills"/*; do
+    [ -e "$skill" ] || continue
+    [ -f "$skill/SKILL.md" ] || continue
+    link_home_dot "$skill" "$CODEX_HOME/skills/$(basename "$skill")"
+  done
+  # Some Codex builds also look for ~/.agents/skills relative to the directory
+  # that contains the relocated CODEX_HOME (the profile root), not $HOME.
+  mkdir -p "$base/.agents"
+  link_home_dot "$real_home/.agents/skills" "$base/.agents/skills"
+fi
+
+case "$name" in
+  cursor)
+    export CURSOR_CONFIG_DIR="$base/cursor"
+    exec "$real" --user-data-dir "$base/cursor-app" --extensions-dir "$base/cursor-app/extensions" "$@"
+    ;;
+  cursor-agent|agent)
+    # On macOS the Agent CLI stores login at $HOME/.cursor/auth.json and ignores
+    # CURSOR_CONFIG_DIR for that file. Isolate HOME for this process only.
+    export AGENT_PROFILES_REAL_HOME="$real_home"
+    export HOME="$base/cursor-home"
+    export CURSOR_CONFIG_DIR="$HOME/.cursor"
+    export AGENT_CLI_CREDENTIAL_STORE=file
+    link_home_dot "$real_home/.ssh" "$HOME/.ssh"
+    link_home_dot "$real_home/.gitconfig" "$HOME/.gitconfig"
+    # Relocated HOME hides protocol skill paths. Mirror skill directories only;
+    # never the rest of ~/.cursor, ~/.claude, or ~/.codex (those hold login).
+    mkdir -p "$HOME/.agents" "$HOME/.claude" "$HOME/.cursor" "$HOME/.codex"
+    link_home_dot "$real_home/.agents/skills" "$HOME/.agents/skills"
+    link_home_dot "$real_home/.claude/skills" "$HOME/.claude/skills"
+    link_home_dot "$real_home/.cursor/skills" "$HOME/.cursor/skills"
+    link_home_dot "$real_home/.codex/skills" "$HOME/.codex/skills"
+    exec "$real" "$@"
+    ;;
+  *)
+    exec "$real" "$@"
+    ;;
+esac

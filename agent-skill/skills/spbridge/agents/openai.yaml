@@ -1,0 +1,6 @@
+interface:
+  display_name: "Spartan Bridge"
+  short_description: "Invoke the installed Spartan Protocol Bridge runtime after one Spartan round"
+  default_prompt: "Use $spbridge with an explicit Spartan handoff."
+policy:
+  allow_implicit_invocation: false

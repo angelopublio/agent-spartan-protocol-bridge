@@ -1,0 +1,20 @@
+{
+  "name": "spartan-bridge",
+  "interface": {
+    "displayName": "Agent Spartan Protocol Bridge"
+  },
+  "plugins": [
+    {
+      "name": "spbridge",
+      "source": {
+        "source": "local",
+        "path": "./agent-skill"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

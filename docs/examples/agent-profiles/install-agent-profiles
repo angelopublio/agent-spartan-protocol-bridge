@@ -1,0 +1,37 @@
+#!/bin/sh
+# Install or refresh machine-local official-client wrappers for Spartan Bridge.
+# Copies only resolver and wrapper scripts. Never copies auth.json, tokens, or
+# skill sources. Does not modify Agent Spartan Protocol.
+set -eu
+
+src_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+dest_root="${AGENT_PROFILES_HOME:-$HOME/.agent-profiles}"
+bin_dir="$dest_root/bin"
+
+for required in resolve-profile wrap-official-client; do
+  if [ ! -f "$src_dir/$required" ]; then
+    printf 'error: missing %s\n' "$src_dir/$required" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$bin_dir"
+cp "$src_dir/resolve-profile" "$dest_root/resolve-profile"
+cp "$src_dir/wrap-official-client" "$bin_dir/wrap-official-client"
+chmod 0755 "$dest_root/resolve-profile" "$bin_dir/wrap-official-client"
+
+for name in claude codex cursor cursor-agent agent; do
+  ln -sfn wrap-official-client "$bin_dir/$name"
+done
+
+if [ ! -e "$dest_root/roots" ] && [ -f "$src_dir/roots.example" ]; then
+  cp "$src_dir/roots.example" "$dest_root/roots"
+  chmod 0600 "$dest_root/roots"
+fi
+
+printf 'Installed wrappers in %s\n' "$dest_root"
+printf 'Next:\n'
+printf '  1. Put %s first on PATH in ~/.zprofile and ~/.zshrc, then open a new terminal.\n' "$bin_dir"
+printf '  2. From a repository for each alias, run: claude --version && codex --version && cursor-agent --help >/dev/null\n'
+printf '     Isolated Codex and Cursor Agent CLI then mirror protocol skills from ~/.agents/skills.\n'
+printf '  3. Restart Claude Code, Codex, and agent. Do not copy auth.json or amend agent-spartan-protocol.\n'

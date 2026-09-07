@@ -1,0 +1,88 @@
+#!/bin/sh
+# Resolve the official-client profile for a directory.
+# 1) unique Client context in the nearest AGENTS.md
+# 2) longest matching prefix in ~/.agent-profiles/roots
+# 3) personal (~/.agent-profiles/personal)
+set -eu
+dir=${1:-$PWD}
+if [ -d "$dir" ]; then
+  dir=$(CDPATH= cd -- "$dir" && pwd -P)
+fi
+
+alias_from_agents() {
+  awk '
+    BEGIN { FS = "|" }
+    $0 ~ /[Cc]lient [Cc]ontext/ && $0 ~ /^\|/ {
+      in_table = 1
+      col = 0
+      for (i = 1; i <= NF; i++) {
+        cell = $i
+        gsub(/^[ \t]+|[ \t]+$/, "", cell)
+        if (tolower(cell) == "client context") col = i
+      }
+      next
+    }
+    in_table && $0 ~ /^\|[ \t]*-+/ { next }
+    in_table && $0 ~ /^\|/ {
+      if (col < 1) next
+      val = $col
+      gsub(/^[ \t`]+|[ \t`]+$/, "", val)
+      if (val ~ /^[a-z0-9][a-z0-9._-]{0,63}$/) print val
+      next
+    }
+    in_table { exit }
+  ' "$1" | sort -u
+}
+
+walk="$dir"
+agents=""
+while [ "$walk" != "/" ] && [ -n "$walk" ]; do
+  if [ -f "$walk/AGENTS.md" ]; then
+    agents="$walk/AGENTS.md"
+    break
+  fi
+  parent=$(dirname "$walk")
+  [ "$parent" = "$walk" ] && break
+  walk=$parent
+done
+
+if [ -n "$agents" ]; then
+  aliases=$(alias_from_agents "$agents" || true)
+  count=$(printf '%s\n' "$aliases" | awk 'NF { n++ } END { print n+0 }')
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' "$aliases"
+    exit 0
+  fi
+fi
+
+fold() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+roots="${AGENT_PROFILES_ROOTS:-$HOME/.agent-profiles/roots}"
+profile=personal
+best_len=0
+if [ -f "$roots" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    name=${line%%	*}
+    prefix=${line#*	}
+    if [ -d "$prefix" ]; then
+      prefix=$(CDPATH= cd -- "$prefix" && pwd -P)
+    fi
+    len=${#prefix}
+    dir_key=$(fold "$dir")
+    prefix_key=$(fold "$prefix")
+    case "$dir_key" in
+      "$prefix_key"|"$prefix_key"/*)
+        if [ "$len" -ge "$best_len" ]; then
+          best_len=$len
+          profile=$name
+        fi
+        ;;
+    esac
+  done < "$roots"
+fi
+printf '%s\n' "$profile"

@@ -1,0 +1,42 @@
+{
+  "name": "spartan-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "dist/**",
+    "agent-skill/**",
+    ".agents/plugins/marketplace.json",
+    "docs/**",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "package.json"
+  ],
+  "description": "Independent local runtime for Agent Spartan Protocol role execution",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "spartan-bridge": "./dist/cli/main.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postbuild": "chmod +x dist/cli/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

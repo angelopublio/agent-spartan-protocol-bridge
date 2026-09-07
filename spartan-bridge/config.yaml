@@ -1,0 +1,5 @@
+schema_version: 1
+transitions:
+  review_plan_pass:
+    successor: implementer
+    dispatch: automatic

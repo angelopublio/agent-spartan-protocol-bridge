@@ -1,0 +1,26 @@
+{
+  "name": "spbridge",
+  "version": "0.1.0",
+  "description": "Run Agent Spartan Protocol producer rounds through the installed Spartan Bridge runtime.",
+  "author": {
+    "name": "Angelo Publio",
+    "url": "https://github.com/angelopublio"
+  },
+  "homepage": "https://github.com/angelopublio/agent-spartan-protocol-bridge#readme",
+  "repository": "https://github.com/angelopublio/agent-spartan-protocol-bridge",
+  "license": "MIT",
+  "keywords": ["agent-skill", "spartan", "review", "workflow"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Spartan Bridge",
+    "shortDescription": "Run a Spartan producer round and Bridge review",
+    "longDescription": "Optional Codex packaging for the portable spbridge skill. The separately installed Spartan Bridge runtime retains all workflow authority.",
+    "developerName": "Angelo Publio",
+    "category": "Productivity",
+    "capabilities": ["Agent skill"],
+    "websiteURL": "https://github.com/angelopublio/agent-spartan-protocol-bridge",
+    "defaultPrompt": [
+      "Use $spbridge with this explicit Spartan handoff."
+    ]
+  }
+}

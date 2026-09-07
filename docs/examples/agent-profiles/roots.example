@@ -1,0 +1,6 @@
+# Optional directory prefixes when AGENTS.md has no Client context column.
+# Tab-separated: <alias><TAB><absolute-path>
+# The nearest AGENTS.md wins when it declares a single alias.
+# Unmatched directories resolve to personal. Do not copy credentials.
+# Example: a cockpit tree that is always the non-personal alias.
+# company	/Users/you/example-projects
