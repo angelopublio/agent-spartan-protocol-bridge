@@ -610,16 +610,18 @@ test("README adoption example is accepted by the parser", async () => {
 
 const D3_DECLARATION_FENCE = /### D3[^\n]*\n[\s\S]*?```markdown\n([\s\S]*?)\n```/;
 // Six shared rules (byte-identical to task 0022's copy) then the AGENTS.md-only
-// rules; the full section is nine bullets. SEVEN is the whole-section match
-// (name kept for history; it now requires nine).
+// rules; the full section is ten bullets. SEVEN is the whole-section match
+// (name kept for history; it now requires ten).
 const ARTIFACT_AUTHORING_SIX = /## Artifact authoring\n\n(?:- .+\n){6}/;
-const ARTIFACT_AUTHORING_SEVEN = /## Artifact authoring\n\n(?:- .+\n){9}(?=\n|## |```|$)/;
+const ARTIFACT_AUTHORING_SEVEN = /## Artifact authoring\n\n(?:- .+\n){10}(?=\n|## |```|$)/;
 const ARTIFACT_AUTHORING_SEVENTH =
   "- A role change and its envelope move together. A round that changes frontmatter `next_role`, or that finds it already changed, regenerates `## Next Handoff` in the same edit: the advisory, the prompt's `Act as <role>`, and the identifier all match the new role, or the section carries no envelope at all. An artifact whose frontmatter and envelope name different roles is telling a reader to run the wrong round.\n";
 const ARTIFACT_AUTHORING_PATH_RULE =
   "- Every repository path a plan names in its objective, context, scope, decisions, or criteria is confirmed to exist in the current checkout before the plan is written. A path a prior task removed is dead weight the implementer round stops on; name the file that exists, or state that the work is a follow-up outside this repository.\n";
 const ARTIFACT_AUTHORING_AGENTS_TARGET_RULE =
   "- A plan whose decisions or scope edit `AGENTS.md` or `spartan-bridge/config.yaml` declares a human implementer: frontmatter `next_role: human-operator` on the plan-review pass, not the plan-pass auto-chain. Those two paths are outside every automatic write scope, so a mapped implementer cannot satisfy such a plan; without the human-implementer declaration the round is spent discovering that at the implementation-review gate.\n";
+const ARTIFACT_AUTHORING_PRIVATE_IDENTITY_RULE =
+  "- Repository content names no private identity. This repository is published, so a path under a contributor's home directory, a personal e-mail address, or a client-context alias that is not `personal` or `default` is a disclosure the moment it is committed. An Evidence row citing a Bridge run in another repository carries the run id, reason code, verdict, timings and document shape, and never that repository's path, its name, the organisation or product it belongs to, or the alias that selected its launcher. Write the conventional placeholder instead: a `~` path names a dotfile, an absolute home path names a placeholder user, and an address is `t@t.invalid`. The dogfooding rounds that produce the most useful evidence run in private repositories, so the line most worth quoting is the line most likely to disclose. The repository's hygiene check covers four shapes in tracked pathnames and tracked blobs \u2014 an absolute home path whose user segment is not a placeholder, a `~` path that names neither a dotfile nor the single pinned negative fixture, an e-mail address that is not the synthetic one, and a client-context alias in a quoted serialisation that is neither `personal` nor `default`. It does not detect a person, an organisation, a product, a repository or an alias written as prose, nor an alias in an unquoted or command-line form, where an escape sequence or an interpolation can transform the value after the fact; those remain judgement, and passing the check is not evidence that a round has met this rule.\n";
 const D6_RULE_PHRASES = [
   "deriving each criterion from a named decision",
   "re-derive every criterion that touches it",
@@ -745,9 +747,9 @@ test("Artifact authoring stays out of adoption, skill, and routing", { skip: IN_
     extractMatch(agents, ARTIFACT_AUTHORING_SIX, "AGENTS.md six Artifact authoring rules"),
     extractMatch(task, ARTIFACT_AUTHORING_SIX, "task 0022 six Artifact authoring rules"),
   );
-  const seven = extractMatch(agents, ARTIFACT_AUTHORING_SEVEN, "AGENTS.md nine Artifact authoring rules");
-  assert.equal(seven.endsWith(ARTIFACT_AUTHORING_AGENTS_TARGET_RULE), true);
-  for (const rule of [ARTIFACT_AUTHORING_SEVENTH, ARTIFACT_AUTHORING_PATH_RULE, ARTIFACT_AUTHORING_AGENTS_TARGET_RULE]) {
+  const seven = extractMatch(agents, ARTIFACT_AUTHORING_SEVEN, "AGENTS.md ten Artifact authoring rules");
+  assert.equal(seven.endsWith(ARTIFACT_AUTHORING_PRIVATE_IDENTITY_RULE), true);
+  for (const rule of [ARTIFACT_AUTHORING_SEVENTH, ARTIFACT_AUTHORING_PATH_RULE, ARTIFACT_AUTHORING_AGENTS_TARGET_RULE, ARTIFACT_AUTHORING_PRIVATE_IDENTITY_RULE]) {
     assert.equal(agents.split(rule).length - 1, 1);
     assert.equal(task.includes(rule.trim()), false);
     assert.equal(fixture.includes(rule.trim()), false);

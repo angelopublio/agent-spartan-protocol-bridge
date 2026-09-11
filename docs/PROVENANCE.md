@@ -14,6 +14,10 @@ Development used AI coding agents under maintainer direction.
 | `typescript` 5.x | <https://github.com/microsoft/TypeScript> | `dependency` (dev) | Apache-2.0 |
 | `tsx` 4.x | <https://github.com/privatenumber/tsx> | `dependency` (dev) | MIT |
 | `@types/node` | DefinitelyTyped | `dependency` (dev) | MIT |
+| `actions/checkout` v4, pinned `11d5960a326750d5838078e36cf38b85af677262` | <https://github.com/actions/checkout> | `dependency` (CI, unmodified) | MIT |
+| `actions/setup-node` v4, pinned `49933ea5288caeca8642d1e84afbd3f7d6820020` | <https://github.com/actions/setup-node> | `dependency` (CI, unmodified) | MIT |
+
+The two continuous-integration actions are referenced by immutable commit revision rather than by tag, because a tag can be repointed at material this ledger has not recorded. Neither is modified, and the only local material they affect is `.github/workflows/ci.yml`.
 
 ## Protocol and host integrations
 
