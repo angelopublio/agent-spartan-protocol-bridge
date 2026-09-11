@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # macOS, not Linux: producer isolation wraps the platform sandbox, so a
+    # large part of the suite probes a binary that exists only here.
+    runs-on: macos-latest
     steps:
       # Third-party actions are pinned to immutable revisions and recorded in
       # docs/PROVENANCE.md. A tag is mutable; a commit is not.
@@ -22,5 +24,7 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
+      # `npm ci` does not build, and the suite asserts that `dist/` is not stale.
+      - run: npm run build
       - run: npm run typecheck
       - run: npm test
