@@ -8,7 +8,7 @@ task_type: planning
 risk: material
 current_role: planner
 next_role: planner
-updated_at: 2026-09-05
+updated_at: 2026-09-11
 handoff_id: HX-004
 next_handoff_id: none
 ---
@@ -121,6 +121,20 @@ predicate, its message, its exit codes and its per-kind split; there is no
 exemption". Suppressing it on `wait` narrows a decision two tasks have now
 affirmed. D4 below decides that question and records the amendment explicitly.
 
+**Inherited residual from task `0077`, for the planner to fold into a decision
+rather than bolt onto a criterion.** `0077` added `snapshot_site` and
+`snapshot_cap` to `ProducerDiagnostic` and normalized both to `null` in
+`parseTransitionStatusJson` (`src/core/serialize.ts:245-253`), matching the
+existing treatment of `write_scope_code`. It left `waited_ms` alone. That key
+was itself additive, so a document persisted before it parses with
+`waited_ms: undefined` while the two newer keys read `null` — three additive
+keys, two treatments. `0077`'s implementation review raised this as an info
+finding and it was deliberately not fixed there, so that the reviewed diff
+stayed the committed diff. This task already touches that record and already
+corrects the "six-key" prose drift that omits `waited_ms`, so the asymmetry
+belongs here. One `waited_ms: diagnostic.waited_ms ?? null` line closes it. It
+breaks nothing today.
+
 ## Scope
 
 - `src/adapters/adapter.ts:44` — the `ProducerAdapter.waitProducer()` return
@@ -135,6 +149,9 @@ affirmed. D4 below decides that question and records the amendment explicitly.
   `buildProducerDiagnostic` (`:317-357`).
 - `src/core/serialize.ts:140-157` — `serializeProducerDiagnostic`, the
   re-validating whitelist every persisted diagnostic passes through.
+- `src/core/serialize.ts:245-253` — `parseTransitionStatusJson`'s
+  `producer_diagnostic` rebuild, for the `waited_ms` normalization inherited
+  from `0077` (see Context).
 - `src/core/transition.ts` — the two arms at `:745-756` and `:757-768` that
   consume `waitResult`.
 - `src/cli/main.ts:430-437` — the D-031 warning block (D4).
