@@ -64,6 +64,17 @@ async function fixture(): Promise<string> {
   return fs.realpath(root);
 }
 
+async function snapshotPreparedProducerWorkspace(prepared: {
+  workspaceRoot: string;
+  supportScope: readonly string[];
+}) {
+  return snapshotTree(prepared.workspaceRoot, {
+    policy: "workspace",
+    collapsePrefixes: prepared.supportScope,
+    omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+  });
+}
+
 async function sandboxExecProfileUnavailable(): Promise<boolean> {
   const outcome = await createNodeProcessRunner().start({
     executable: SANDBOX_EXEC_EXECUTABLE,
@@ -269,22 +280,86 @@ test("scratch output is discarded while any non-scratch support mutation refuses
   await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "support\n");
   const prepared = await prepareProducerWorkspace({ repoRoot: root, writeScope: SCOPE });
   try {
+    const supportEntry = prepared.baseline.entries.get("node_modules");
+    assert.equal(typeof supportEntry?.hash, "string");
+    assert.equal([...prepared.baseline.entries.keys()].some((entry) => entry.startsWith("node_modules/")), false);
+    assert.equal([...prepared.baseline.entries.keys()].some((entry) => entry === "dist" || entry.startsWith("dist/")), false);
     const cache = path.join(prepared.workspaceRoot, "node_modules", ".cache");
     assert.equal((await fs.stat(cache)).mode & 0o777, 0o700);
     await fs.writeFile(path.join(cache, "tool.cache"), "cache\n");
     await fs.mkdir(path.join(prepared.workspaceRoot, "dist"));
     await fs.writeFile(path.join(prepared.workspaceRoot, "dist", "built.js"), "built\n");
-    let after = await snapshotTree(prepared.workspaceRoot, { policy: "workspace" });
+    let after = await snapshotPreparedProducerWorkspace(prepared);
     assert.deepEqual(await captureProducerMerge({ workspaceRoot: prepared.workspaceRoot, baseline: prepared.baseline, after, writeScope: SCOPE }), []);
     await assert.rejects(fs.access(path.join(root, "dist", "built.js")));
 
     const support = path.join(prepared.workspaceRoot, "node_modules", "pkg", "index.js");
-    await fs.chmod(path.dirname(support), 0o755);
+    const originalStat = await fs.stat(support);
     await fs.chmod(support, 0o644);
-    await fs.writeFile(support, "tampered\n");
-    after = await snapshotTree(prepared.workspaceRoot, { policy: "workspace" });
+    await fs.writeFile(support, "changed\n");
+    await fs.utimes(support, originalStat.atime, originalStat.mtime);
+    await fs.chmod(support, originalStat.mode & 0o7777);
+    after = await snapshotPreparedProducerWorkspace(prepared);
     await assert.rejects(
       () => captureProducerMerge({ workspaceRoot: prepared.workspaceRoot, baseline: prepared.baseline, after, writeScope: SCOPE }),
+      ProducerMergeError,
+    );
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("custom support scope drives both collapsed snapshots without collapsing node_modules", async () => {
+  const root = await fixture();
+  await fs.mkdir(path.join(root, "vendor", "pkg"), { recursive: true });
+  await fs.mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+  await fs.writeFile(path.join(root, "vendor", "pkg", "index.js"), "vendor\n");
+  await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "module\n");
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope: [...SCOPE, "node_modules/"],
+    supportScope: ["vendor/"],
+  });
+  try {
+    assert.deepEqual(prepared.supportScope, ["vendor/"]);
+    assert.equal(typeof prepared.baseline.entries.get("vendor")?.hash, "string");
+    assert.equal(prepared.baseline.entries.has("vendor/pkg/index.js"), false);
+    assert.equal(prepared.baseline.entries.get("node_modules/pkg/index.js")?.kind, "file");
+    await fs.readFile(path.join(prepared.workspaceRoot, "vendor", "pkg", "index.js"));
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    assert.deepEqual(workspaceDiff(prepared.baseline, after), []);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an exact-file support collapse detects a same-size write with restored timestamps", async () => {
+  const root = await fixture();
+  await fs.writeFile(path.join(root, "tool.bin"), "aaaaaaaa");
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope: SCOPE,
+    supportScope: ["tool.bin"],
+  });
+  try {
+    const target = path.join(prepared.workspaceRoot, "tool.bin");
+    const original = await fs.stat(target);
+    assert.equal(typeof prepared.baseline.entries.get("tool.bin")?.hash, "string");
+    await fs.chmod(target, 0o644);
+    await fs.writeFile(target, "bbbbbbbb");
+    await fs.utimes(target, original.atime, original.mtime);
+    await fs.chmod(target, original.mode & 0o7777);
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    await assert.rejects(
+      () => captureProducerMerge({
+        workspaceRoot: prepared.workspaceRoot,
+        baseline: prepared.baseline,
+        after,
+        writeScope: SCOPE,
+        supportScope: prepared.supportScope,
+      }),
       ProducerMergeError,
     );
   } finally {
@@ -654,7 +729,7 @@ test("merge entry and combined source-plus-undo byte caps refuse before a live w
   }
 });
 
-test("producer snapshots detect skipped-tree hard-link writes but retain the metadata-preserving residual", async () => {
+test("producer snapshots detect skipped-tree writes even when size and mtime are restored", async () => {
   for (const skipped of ["node_modules", ".venv"]) {
     const root = await fixture();
     const target = path.join(root, skipped, "pkg", "x");
@@ -679,12 +754,29 @@ test("producer snapshots detect skipped-tree hard-link writes but retain the met
     await fs.writeFile(alias, Buffer.alloc(stable.size, 0x78));
     execFileSync("/usr/bin/touch", ["-r", timestampReference, alias]);
     const afterResidual = await snapshotTree(root, { policy: "producer" });
-    // D-072: metadata-only folded subtrees cannot see same-size writes whose
-    // mtime is restored through a pre-existing cross-root hard link.
-    assert.deepEqual(workspaceDiff(beforeResidual, afterResidual), []);
+    const restoredDiff = workspaceDiff(beforeResidual, afterResidual);
+    assert.equal(restoredDiff.length, 1, skipped);
+    assert.equal(restoredDiff[0]?.path, skipped);
+    assert.deepEqual(restoredDiff[0]?.fields, ["hash"]);
     await fs.rm(aliasDir, { recursive: true, force: true });
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("producer-policy metadata digest detects a ctime-only hard-link count change inside a skipped tree", async () => {
+  const root = await fixture();
+  const target = path.join(root, "node_modules", "pkg", "x");
+  const aliasDir = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-ctime-alias-"));
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, "same\n");
+  const before = await snapshotTree(root, { policy: "producer" });
+  await fs.link(target, path.join(aliasDir, "alias"));
+  const after = await snapshotTree(root, { policy: "producer" });
+  assert.deepEqual(workspaceDiff(before, after), [
+    { path: "node_modules", change: "changed", fields: ["hash"] },
+  ]);
+  await fs.rm(aliasDir, { recursive: true, force: true });
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 test("real sandbox denies live and /tmp writes, permits workspace writes, and inherits across setsid", async (t) => {

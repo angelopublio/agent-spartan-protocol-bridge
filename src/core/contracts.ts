@@ -285,11 +285,32 @@ export function isFiniteIntegerExitCode(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && Number.isFinite(value);
 }
 
-export const PRODUCER_DIAGNOSTIC_STAGES = ["write_scope_lock", "spawn", "wait", "exit_nonzero"] as const;
+export const PRODUCER_DIAGNOSTIC_STAGES = ["write_scope_lock", "capture", "spawn", "wait", "exit_nonzero"] as const;
 export type ProducerDiagnosticStage = (typeof PRODUCER_DIAGNOSTIC_STAGES)[number];
 
 export function isProducerDiagnosticStage(value: unknown): value is ProducerDiagnosticStage {
   return (PRODUCER_DIAGNOSTIC_STAGES as readonly string[]).includes(value as string);
+}
+
+export const PRODUCER_SNAPSHOT_SITES = [
+  "workspace_baseline",
+  "repo_before",
+  "runtime_before",
+  "workspace_after",
+  "repo_after",
+  "runtime_after",
+] as const;
+export type ProducerSnapshotSite = (typeof PRODUCER_SNAPSHOT_SITES)[number];
+
+export function isProducerSnapshotSite(value: unknown): value is ProducerSnapshotSite {
+  return (PRODUCER_SNAPSHOT_SITES as readonly string[]).includes(value as string);
+}
+
+export const PRODUCER_SNAPSHOT_CAPS = ["entries", "hash_bytes"] as const;
+export type ProducerSnapshotCap = (typeof PRODUCER_SNAPSHOT_CAPS)[number];
+
+export function isProducerSnapshotCap(value: unknown): value is ProducerSnapshotCap {
+  return (PRODUCER_SNAPSHOT_CAPS as readonly string[]).includes(value as string);
 }
 
 // The one nullable closed record that explains a producer execution stop
@@ -304,15 +325,16 @@ export type ProducerDiagnostic = {
   adapter_phase: AdapterFailurePhase | null;
   adapter_cause: AdapterFailureCause | null;
   waited_ms: number | null;
+  snapshot_site: ProducerSnapshotSite | null;
+  snapshot_cap: ProducerSnapshotCap | null;
 };
 
 // The shared constructor every D2 arm uses to populate `producer_diagnostic`
 // at its exact catch/result boundary. It validates membership in the closed
-// stage/write-scope/adapter-phase/adapter-cause enums and accepts only a
-// finite integer exit code or null, throwing on anything else so an
-// out-of-domain value can never originate from this constructor. It never
-// reads `error.message`, `error.name`, stdout, stderr, a payload, or any
-// other free-text source.
+// stage/write-scope/adapter/snapshot enums and accepts only a finite integer
+// exit code or null, throwing on anything else so an out-of-domain value can
+// never originate from this constructor. It never reads `error.message`,
+// `error.name`, stdout, stderr, a payload, or any other free-text source.
 export function buildProducerDiagnostic(input: {
   stage: ProducerDiagnosticStage;
   exitCode?: number | null;
@@ -321,6 +343,8 @@ export function buildProducerDiagnostic(input: {
   adapterPhase?: AdapterFailurePhase | null;
   adapterCause?: AdapterFailureCause | null;
   waitedMs?: number | null;
+  snapshotSite?: ProducerSnapshotSite | null;
+  snapshotCap?: ProducerSnapshotCap | null;
 }): ProducerDiagnostic {
   if (!isProducerDiagnosticStage(input.stage)) {
     throw new TypeError("invalid producer diagnostic stage");
@@ -345,6 +369,14 @@ export function buildProducerDiagnostic(input: {
   if (waitedMs !== null && (!Number.isInteger(waitedMs) || waitedMs <= 0)) {
     throw new TypeError("invalid producer diagnostic waited ms");
   }
+  const snapshotSite = input.snapshotSite ?? null;
+  if (snapshotSite !== null && !isProducerSnapshotSite(snapshotSite)) {
+    throw new TypeError("invalid producer diagnostic snapshot site");
+  }
+  const snapshotCap = input.snapshotCap ?? null;
+  if (snapshotCap !== null && !isProducerSnapshotCap(snapshotCap)) {
+    throw new TypeError("invalid producer diagnostic snapshot cap");
+  }
   return {
     stage: input.stage,
     exit_code: exitCode,
@@ -353,6 +385,8 @@ export function buildProducerDiagnostic(input: {
     adapter_phase: adapterPhase,
     adapter_cause: adapterCause,
     waited_ms: waitedMs,
+    snapshot_site: snapshotSite,
+    snapshot_cap: snapshotCap,
   };
 }
 

@@ -30,11 +30,12 @@ import {
   type AdapterFailureRecord,
   type AdapterProducerInput,
   type ProducerDiagnostic,
+  type ProducerSnapshotSite,
   type TransitionEventDocument,
 } from "../src/core/contracts.ts";
 import type { AppDeps, Clock } from "../src/core/review.ts";
 import { runReview } from "../src/core/review.ts";
-import { snapshotTree } from "../src/core/snapshot.ts";
+import { SNAPSHOT_ENTRY_CAP, snapshotTree } from "../src/core/snapshot.ts";
 import { advanceFromCheckpoint, continueAfterPlanReview, resolveAdvanceChainFromEvents, runReviewThenSuccessor } from "../src/core/transition.ts";
 import { composeTerminalCloseOut } from "../src/core/task-write.ts";
 import { sha256Bytes } from "../src/core/serialize.ts";
@@ -531,6 +532,68 @@ test("authorized automatic path runs the implementer then implementation review 
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test("application-sized support tree does not exhaust producer snapshot entries", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(root);
+  const supportDir = path.join(root, "node_modules", "large-package");
+  await fs.mkdir(supportDir, { recursive: true });
+  const fileCount = SNAPSHOT_ENTRY_CAP + 1;
+  for (let start = 0; start < fileCount; start += 250) {
+    await Promise.all(
+      Array.from({ length: Math.min(250, fileCount - start) }, (_, offset) =>
+        fs.writeFile(path.join(supportDir, `file-${start + offset}.js`), "x"),
+      ),
+    );
+  }
+  let reviews = 0;
+  const source = {
+    result: () => {
+      reviews += 1;
+      return reviews === 1 ? passResult("plan") : passResult("implementation");
+    },
+  };
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({ clock: chainClock(), createAdapter: () => mutatingProducer(source) }),
+  );
+  assert.equal(outcome.kind, "review");
+  assert.equal(outcome.status?.reason_code, "review_passed", JSON.stringify(outcome));
+  assert.equal(outcome.transition?.state, "completed");
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("scratch-only producer output is discarded without stopping the chain", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(root);
+  await fs.mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "support\n");
+  let reviews = 0;
+  const source = {
+    result: () => {
+      reviews += 1;
+      return reviews === 1 ? passResult("plan") : passResult("implementation");
+    },
+  };
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: chainClock(),
+      createAdapter: () => mutatingProducer(source, async (workspace) => {
+        await fs.mkdir(path.join(workspace, "dist"), { recursive: true });
+        await fs.mkdir(path.join(workspace, "node_modules", ".cache"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "dist", "main.js"), "built\n");
+        await fs.writeFile(path.join(workspace, "node_modules", ".cache", "build.bin"), "cache\n");
+      }),
+    }),
+  );
+  assert.equal(outcome.kind, "review");
+  assert.equal(outcome.status?.reason_code, "review_passed");
+  assert.equal(outcome.transition?.state, "completed");
+  await assert.rejects(fs.access(path.join(root, "dist", "main.js")));
+  await assert.rejects(fs.access(path.join(root, "node_modules", ".cache", "build.bin")));
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("an out-of-scope producer write is a write_scope_violation", async () => {
   const { root, taskRel } = await autoRepo();
   await writeBridgeConfig(root);
@@ -839,6 +902,29 @@ test("snapshot and task-read failures after producer_started persist terminal_st
       }),
     ],
     [
+      "pre-child snapshot hash cap",
+      "reviewer_isolation_unavailable",
+      async (root: string) => ({
+        snapshotCaps: { hashBytes: 1 },
+        extra: undefined as ((workspace: string, taskRel: string, liveRoot: string) => Promise<void>) | undefined,
+        afterPlan: async () => root,
+      }),
+    ],
+    [
+      "producer repo_after snapshot cap",
+      "reviewer_isolation_unavailable",
+      async (root: string) => {
+        const before = await snapshotTree(root, { policy: "producer" });
+        return {
+          snapshotCaps: { entries: before.entries.size },
+          extra: async (_workspace: string, _taskRel: string, liveRoot: string) => {
+            await fs.writeFile(path.join(liveRoot, "overflow.ts"), "export {}\n", "utf8");
+          },
+          afterPlan: async () => root,
+        };
+      },
+    ],
+    [
       "post-child snapshot cap",
       "adapter_error",
       async (root: string) => {
@@ -908,7 +994,7 @@ test("snapshot and task-read failures after producer_started persist terminal_st
                 producers += 1;
                 await declareImplementationReady(input.workspace_root, input.task_path);
                 if (configured.extra) {
-                  await configured.extra(input.workspace_root, input.task_path);
+                  await configured.extra(input.workspace_root, input.task_path, input.repo_root);
                 }
               },
             }),
@@ -919,6 +1005,27 @@ test("snapshot and task-read failures after producer_started persist terminal_st
       assert.equal(outcome.error, null, label);
       assert.equal(outcome.transition?.state, "stopped", label);
       assert.equal(outcome.transition?.reason_code, reason, label);
+      if (label === "pre-child snapshot cap" || label === "pre-child snapshot hash cap") {
+        assert.deepEqual(outcome.transition?.producer_diagnostic, {
+          stage: "capture",
+          exit_code: null,
+          timed_out: false,
+          write_scope_code: null,
+          adapter_phase: null,
+          adapter_cause: null,
+          waited_ms: null,
+          snapshot_site: "repo_before",
+          snapshot_cap: label === "pre-child snapshot cap" ? "entries" : "hash_bytes",
+        }, label);
+      }
+      if (label === "producer repo_after snapshot cap") {
+        assert.equal(outcome.transition?.producer_diagnostic?.snapshot_site, "repo_after", label);
+        assert.equal(outcome.transition?.producer_diagnostic?.snapshot_cap, "entries", label);
+      }
+      if (label === "post-child snapshot filesystem error") {
+        assert.equal(outcome.transition?.producer_diagnostic?.snapshot_site, "repo_after", label);
+        assert.equal(outcome.transition?.producer_diagnostic?.snapshot_cap, null, label);
+      }
       const events = (
         await fs.readFile(
           path.join(root, ".spartan-bridge", "transitions", outcome.transition!.transition_id, "events.jsonl"),
@@ -937,7 +1044,7 @@ test("snapshot and task-read failures after producer_started persist terminal_st
       assert.equal(events.at(-1)?.type, "terminal_stop", label);
       assert.equal(events.at(-1)?.state, "stopped", label);
       await assert.rejects(() => fs.access(path.join(root, ".spartan-bridge", "locks", WRITER_LOCK_NAME)));
-      if (label === "pre-child snapshot cap") {
+      if (label === "pre-child snapshot cap" || label === "pre-child snapshot hash cap") {
         assert.equal(producers, 0, label);
       } else {
         assert.equal(producers, 1, label);
@@ -946,6 +1053,62 @@ test("snapshot and task-read failures after producer_started persist terminal_st
       await configured.afterPlan();
       await fs.rm(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("each producer snapshot cap stop records its exact site", async () => {
+  const sites: readonly ProducerSnapshotSite[] = [
+    "workspace_baseline",
+    "repo_before",
+    "runtime_before",
+    "workspace_after",
+    "repo_after",
+    "runtime_after",
+  ];
+
+  for (const site of sites) {
+    const { root, taskRel } = await autoRepo();
+    await writeBridgeConfig(root);
+    let producers = 0;
+    const source = { result: () => passResult("plan") };
+    const outcome = await runReviewThenSuccessor(
+      { repo: root, task: taskRel },
+      testDeps({
+        clock: testClock(PLAN_ID),
+        producerSnapshotCaps: { [site]: { entries: 1 } },
+        createAdapter: () =>
+          new FakeAdapter(source, fakeCapabilities(), null, {
+            mutate: async (input) => {
+              producers += 1;
+              await declareImplementationReady(input.workspace_root, input.task_path);
+            },
+          }),
+      }),
+    );
+
+    assert.equal(outcome.kind, "transition", site);
+    assert.equal(outcome.transition?.state, "stopped", site);
+    assert.equal(outcome.transition?.reason_code, "reviewer_isolation_unavailable", site);
+    assert.deepEqual(outcome.transition?.producer_diagnostic, {
+      stage: site === "workspace_baseline" ? "write_scope_lock" : "capture",
+      exit_code: null,
+      timed_out: false,
+      write_scope_code: null,
+      adapter_phase: null,
+      adapter_cause: null,
+      waited_ms: null,
+      snapshot_site: site,
+      snapshot_cap: "entries",
+    }, site);
+    assert.equal(
+      producers,
+      site === "workspace_after" || site === "repo_after" || site === "runtime_after" ? 1 : 0,
+      site,
+    );
+    const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+    assert.equal(terminal.producer_diagnostic?.snapshot_site, site, site);
+    assert.equal(terminal.producer_diagnostic?.snapshot_cap, "entries", site);
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
@@ -1006,8 +1169,8 @@ test("releaseProducerIsolation is invoked once per producer round after wait and
 // lock and the runtime-ownership snapshot's own mode comparison (`chflags`
 // changes no field `snapshotTree` records, so it cannot itself trip
 // `runtime_state_violation`). It is otherwise a real, additional-privilege
-// filesystem lock exercised through the exact `startProducer`/
-// producer-isolation release seam `finishProducerRound` uses, so a
+// filesystem lock established through the exact `lockProducerIsolation`/
+// `releaseProducerIsolation` seam `finishProducerRound` uses, so a
 // transition write attempted while it is active fails exactly like a write
 // attempted while the real write-scope guard is active.
 class ChflagsBridgeLockAdapter extends FakeAdapter {
@@ -1021,12 +1184,12 @@ class ChflagsBridgeLockAdapter extends FakeAdapter {
     super(source, fakeCapabilities(), null, producer);
   }
 
-  override async startProducer(input: AdapterProducerInput): Promise<void> {
+  override async lockProducerIsolation(repoRoot: string, workspaceRoot: string): Promise<void> {
     assert.equal(process.platform, "darwin");
     const bridgeDir = path.join(this.repoRoot, ".spartan-bridge");
     await execFileAsync("chflags", ["-R", "uchg", bridgeDir]);
     this.lockedDir = bridgeDir;
-    await super.startProducer(input);
+    await super.lockProducerIsolation(repoRoot, workspaceRoot);
   }
 
   override async releaseProducerIsolation(): Promise<void> {
@@ -1470,7 +1633,12 @@ test("every collapsed producer_failure arm and the producer_timeout arm carry th
     assert.equal(outcome.status, null, testCase.label);
     assert.equal(outcome.transition?.state, "stopped", testCase.label);
     assert.equal(outcome.transition?.reason_code, testCase.reason, testCase.label);
-    assert.deepEqual(outcome.transition?.producer_diagnostic, testCase.diagnostic, testCase.label);
+    const expectedDiagnostic = {
+      ...testCase.diagnostic,
+      snapshot_site: null,
+      snapshot_cap: null,
+    };
+    assert.deepEqual(outcome.transition?.producer_diagnostic, expectedDiagnostic, testCase.label);
 
     const transitionId = outcome.transition!.transition_id;
     const events = await readAllTransitionEvents(root, transitionId);
@@ -1485,7 +1653,7 @@ test("every collapsed producer_failure arm and the producer_timeout arm carry th
     assert.equal(terminal.type, "terminal_stop", testCase.label);
     assert.equal(terminal.state, "stopped", testCase.label);
     assert.equal(terminal.reason_code, testCase.reason, testCase.label);
-    assert.deepEqual(terminal.producer_diagnostic, testCase.diagnostic, testCase.label);
+    assert.deepEqual(terminal.producer_diagnostic, expectedDiagnostic, testCase.label);
 
     // Every non-terminal event carries a null diagnostic (D1): only the
     // final terminal_stop record ever carries the non-null classification.

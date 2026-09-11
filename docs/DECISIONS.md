@@ -100,7 +100,7 @@ remains a single plan-review tool.
 ## D-036: Producer execution stops carry a closed diagnostic classification, not captured output (2026-08-23)
 
 **Decision:** `TransitionStatusDocument` and `TransitionEventDocument` gain
-one additive, nullable `producer_diagnostic` field with exactly six closed
+one additive, nullable `producer_diagnostic` field, originally with six closed
 scalar keys: `stage` (`write_scope_lock | spawn | wait | exit_nonzero`),
 `exit_code` (integer or null), `timed_out` (boolean), `write_scope_code` (the
 existing four `ProducerWriteScopeError` codes or null), `adapter_phase` (an
@@ -139,10 +139,14 @@ orchestration stages the stop happened in.
 still parse with the field normalized to `null` via `parseTransitionStatusJson`,
 and the existing `transition-status`/`transition-events` CLI commands keep
 returning stored bytes unchanged (they already read raw bytes rather than
-re-serializing). The new serializer whitelists exactly the six keys and
+re-serializing). The serializer originally whitelisted those six keys and
 rejects or nulls any value outside the closed enums, the integer-or-null
 exit domain, or the boolean timeout domain, so an injected extra property or
 out-of-domain value can never reach persisted JSON.
+
+**Amendment (2026-09-10):** D-074 extends this record to nine keys. The
+additive `waited_ms`, `snapshot_site`, and `snapshot_cap` fields remain closed
+and nullable; older records normalize absent snapshot fields to `null`.
 
 ## D-037: The Darwin producer sandbox confines the repository, not the machine (2026-08-23)
 
@@ -1359,8 +1363,9 @@ workspace and the child environment's existing `HOME` and `TMPDIR`, then
 denies the canonical repository root last. Adapters only spawn; they must
 declare `isolated_producer_workspace: true`.
 
-After the producer exits, the runtime takes a full-hash workspace snapshot,
-classifies `dist/` and `node_modules/.cache/` as discarded scratch, captures
+After the producer exits, the runtime snapshots admitted product with full
+hashes, classifies `dist/` and `node_modules/.cache/` as discarded scratch,
+captures
 admitted changes into memory, and resolves every live destination with
 `O_NOFOLLOW_ANY`. Only after the whole candidate set and its undo state validate
 does it release the profile and apply changes under the existing writer lock.
@@ -1382,8 +1387,50 @@ tests runnable without admitting dependencies to merge-back.
 cross-root hard link cannot be prevented by a path profile. The live producer
 snapshot detects it only when the write lands between `productBefore` and
 `productAfter`, and only when it changes content in a hashed tier or changes
-size/`mtimeNs` in a metadata tier. Skipped subtrees use a recursive metadata
-digest, and files above 1 MiB use size plus `mtimeNs`; a size-preserving write
-that restores `mtimeNs`, or a surviving descendant's delayed write after
-`productAfter`, remains outside the claimed detection. Detached process-group
-signalling is hygiene, not containment.
+the fields represented in a metadata tier. Skipped subtrees use a recursive
+metadata digest; D-074 later added `ctimeNs` to that digest, while ordinary
+files above 1 MiB still use size plus `mtimeNs`. A size-preserving write that
+restores `mtimeNs` therefore remains outside the claimed detection only in the
+latter tier. A surviving descendant's delayed write after `productAfter`
+remains outside the detection window. Detached process-group signalling is
+hygiene, not containment.
+
+## D-074 — Producer snapshots collapse support, omit scratch, and keep one resolved scope (task 0077)
+
+**Decision:** On 2026-09-10, producer-workspace snapshots began omitting scratch
+paths and recording each support root as one recursive metadata-digest entry.
+The merge classifier has three relevant dispositions: scratch is discarded,
+support refuses the whole round when changed, and admitted product is captured.
+Only scratch is therefore safe to omit. Support remains represented so a write
+still produces `write_scope_violation`, but the snapshot no longer spends an
+entry or a content read on every installed dependency.
+
+The digest includes each descendant inode's `ctime` as well as kind, relative
+path, mode, size, `mtime`, and symlink target. A producer can restore `mtime`
+after a same-size content replacement, but it cannot set `ctime`; adding the
+latter preserves detection without reopening every dependency file. The
+tradeoff is explicit: the refusal still detects that the support tree changed,
+but now names the support root and no longer proves which descendant or bytes
+changed. Scratch prefixes, including `node_modules/.cache/` nested beneath a
+support root, contribute no digest record.
+
+**Rationale:** The dependency tree is copied so the producer can build and
+test, yet the prior full-hash baseline and capture both walked it under the
+20,000-entry cap. An application-sized installation could therefore finish the
+producer and then stop before implementation review, or fail earlier while
+preparing the baseline. Omitting support would remove the cap failure but also
+silence the merge's live support-write refusal. Metadata collapse retains that
+refusal at bounded snapshot cardinality.
+
+**Consequence:** `prepareProducerWorkspace` resolves its support scope once,
+uses it for the copy and baseline, and returns it for the capture and merge;
+there is no second hardcoded support list to drift. Both workspace snapshots
+apply the same collapse/omit rules, while callers that supply neither list keep
+their old behavior. The shared producer-policy metadata digest also detects
+`ctime`-only changes in skipped repository trees. Those live snapshots detect
+any change in their window rather than attributing it to the producer, so
+Bridge-owned guard metadata changes must complete before the baseline; the
+isolation lock is therefore established before `repo_before` and
+`runtime_before`. Snapshot-cap stops now carry closed `snapshot_site` and
+`snapshot_cap` values, distinguishing all six walks and the `entries` versus
+`hash_bytes` limits.

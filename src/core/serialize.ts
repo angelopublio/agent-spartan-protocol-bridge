@@ -5,6 +5,8 @@ import {
   isDeclarationInvalidDetail,
   isFiniteIntegerExitCode,
   isProducerDiagnosticStage,
+  isProducerSnapshotCap,
+  isProducerSnapshotSite,
   isProducerWriteScopeFailure,
   isTaskWriteRejectionCause,
   type AdapterFailureRecord,
@@ -134,7 +136,7 @@ function serializeAdapterFailure(record: AdapterFailureRecord | null): AdapterFa
 
 // Defense in depth for D4: even if an out-of-domain value somehow reached
 // this boundary (bypassing the closed `buildProducerDiagnostic` constructor),
-// only the exact seven whitelisted keys are ever copied, and any value outside
+// only the exact whitelisted keys are ever copied, and any value outside
 // its closed enum, the integer-or-null exit domain, or the boolean timeout
 // domain is nulled or normalized rather than passed through.
 function serializeProducerDiagnostic(record: ProducerDiagnostic | null): ProducerDiagnostic | null {
@@ -153,6 +155,8 @@ function serializeProducerDiagnostic(record: ProducerDiagnostic | null): Produce
     adapter_phase: isAdapterFailurePhase(record.adapter_phase) ? record.adapter_phase : null,
     adapter_cause: isAdapterFailureCause(record.adapter_cause) ? record.adapter_cause : null,
     waited_ms: waitedMs,
+    snapshot_site: isProducerSnapshotSite(record.snapshot_site) ? record.snapshot_site : null,
+    snapshot_cap: isProducerSnapshotCap(record.snapshot_cap) ? record.snapshot_cap : null,
   };
 }
 
@@ -238,9 +242,16 @@ export function serializeTransitionEvent(event: TransitionEventDocument): string
 
 export function parseTransitionStatusJson(text: string): TransitionStatusDocument {
   const parsed = JSON.parse(text) as TransitionStatusDocument;
+  const diagnostic = parsed.producer_diagnostic;
   return {
     ...parsed,
-    producer_diagnostic: parsed.producer_diagnostic ?? null,
+    producer_diagnostic: diagnostic === null || diagnostic === undefined
+      ? null
+      : {
+          ...diagnostic,
+          snapshot_site: diagnostic.snapshot_site ?? null,
+          snapshot_cap: diagnostic.snapshot_cap ?? null,
+        },
     unwritable_plan_targets: serializeUnwritablePlanTargets(parsed.unwritable_plan_targets),
     declaration_invalid_detail: serializeDeclarationInvalidDetail(parsed.declaration_invalid_detail),
   };

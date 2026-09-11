@@ -16,7 +16,16 @@ import os from "node:os";
 import path from "node:path";
 import type { ReasonCode, SnapshotDiffEntry, WorkspaceManifest, WorkspaceManifestFileEntry } from "./contracts.ts";
 import { sha256Bytes } from "./serialize.ts";
-import { producerPathDenied, snapshotTree, SnapshotCapError, workspaceDiff, type SnapshotEntryKind, type TreeSnapshot } from "./snapshot.ts";
+import {
+  isPrefixMember,
+  producerPathDenied,
+  snapshotTree,
+  SnapshotCapError,
+  workspaceDiff,
+  type SnapshotEntryKind,
+  type SnapshotTreeCaps,
+  type TreeSnapshot,
+} from "./snapshot.ts";
 import { unicodeDefaultCaseFold } from "./unicode-casefold.ts";
 import { writeWorkspaceManifestAtomic } from "../runtime/store.ts";
 import { isAuthorityWritePath, isPathAdmittedByScope } from "../policy/agents-policy.ts";
@@ -1062,6 +1071,7 @@ function buildManifest(
 export type PreparedProducerWorkspace = {
   workspaceRoot: string;
   baseline: TreeSnapshot;
+  supportScope: readonly string[];
 };
 
 export type ProducerWorkspaceClass = "scratch" | "support" | "admitted" | "refused";
@@ -1110,12 +1120,18 @@ export type ProducerMergeReadDeps = {
 };
 
 export async function prepareProducerWorkspace(
-  input: { repoRoot: string; writeScope: readonly string[]; supportScope?: readonly string[] },
+  input: {
+    repoRoot: string;
+    writeScope: readonly string[];
+    supportScope?: readonly string[];
+    snapshotCaps?: Pick<SnapshotTreeCaps, "entries" | "hashBytes">;
+  },
   deps: ProducerWorkspaceDeps = {},
 ): Promise<PreparedProducerWorkspace> {
   const repoRoot = await fs.realpath(path.resolve(input.repoRoot));
   const writeRules = parseScope(input.writeScope);
-  const supportRules = parseScope(input.supportScope ?? PRODUCER_SUPPORT_SCOPE);
+  const supportScope = [...(input.supportScope ?? PRODUCER_SUPPORT_SCOPE)];
+  const supportRules = parseScope(supportScope);
   let workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-producer-"));
   let complete = false;
   try {
@@ -1138,9 +1154,14 @@ export async function prepareProducerWorkspace(
       }
     }
     await ensureWritableSupportScratch(workspaceRoot, supportRules);
-    const baseline = await snapshotTree(workspaceRoot, { policy: "workspace" });
+    const baseline = await snapshotTree(workspaceRoot, {
+      ...input.snapshotCaps,
+      policy: "workspace",
+      collapsePrefixes: supportScope,
+      omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+    });
     complete = true;
-    return { workspaceRoot, baseline };
+    return { workspaceRoot, baseline, supportScope };
   } catch (error) {
     if (error instanceof SnapshotCapError) {
       throw error;
@@ -1353,11 +1374,6 @@ async function mkdirIfAbsent(abs: string, mode: number): Promise<void> {
       throw error;
     }
   }
-}
-
-function isPrefixMember(posix: string, prefix: string): boolean {
-  const root = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
-  return posix === root || posix.startsWith(`${root}/`);
 }
 
 export function classifyProducerWorkspacePath(

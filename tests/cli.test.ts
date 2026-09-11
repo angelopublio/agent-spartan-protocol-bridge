@@ -1868,6 +1868,8 @@ test("plan review recovery line eligibility and bytes follow D1/D2", () => {
     adapter_phase: null,
     adapter_cause: null,
     waited_ms: null,
+    snapshot_site: null,
+    snapshot_cap: null,
   } as const;
   const transition = {
     schema_version: 2,

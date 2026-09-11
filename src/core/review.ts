@@ -48,6 +48,7 @@ import {
   type EventType,
   type ModelObserved,
   type ProducerIdentity,
+  type ProducerSnapshotSite,
   type ReasonCode,
   type ResolvedPolicy,
   type ReviewChainRecord,
@@ -79,6 +80,10 @@ export type AppDeps = {
   catalog: LauncherCatalog;
   clock: Clock;
   snapshotCaps?: { entries?: number; hashBytes?: number };
+  // Per-site cap overrides make every producer snapshot stop reproducible
+  // without changing the production defaults. Repository snapshots retain
+  // `snapshotCaps` as their shared fallback.
+  producerSnapshotCaps?: Partial<Record<ProducerSnapshotSite, { entries?: number; hashBytes?: number }>>;
   // Deterministic seam for the documented post-productAfter hard-link window.
   afterProducerSnapshots?: () => void | Promise<void>;
 };

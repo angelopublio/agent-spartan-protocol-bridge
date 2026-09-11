@@ -416,6 +416,7 @@ export function testDeps(options?: {
   createAdapter?: () => Adapter;
   clock?: Clock;
   snapshotCaps?: { entries?: number; hashBytes?: number };
+  producerSnapshotCaps?: AppDeps["producerSnapshotCaps"];
 }): AppDeps {
   const source = options?.source ?? constantSource(passResult());
   return {
@@ -423,6 +424,7 @@ export function testDeps(options?: {
     catalog: createLauncherCatalog(options?.createAdapter ?? (() => new FakeAdapter(source))),
     clock: options?.clock ?? testClock(),
     snapshotCaps: options?.snapshotCaps,
+    producerSnapshotCaps: options?.producerSnapshotCaps,
   };
 }
 

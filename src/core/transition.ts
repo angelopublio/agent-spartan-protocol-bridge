@@ -34,6 +34,7 @@ import {
   SCHEMA_VERSION,
   type CanonicalHost,
   type ProducerDiagnostic,
+  type ProducerSnapshotSite,
   type ReasonCode,
   type StatusDocument,
   type TransitionEventDocument,
@@ -54,7 +55,7 @@ import {
   cleanupProducerWorkspace,
   prepareProducerWorkspace,
   ProducerMergeError,
-  PRODUCER_SUPPORT_SCOPE,
+  PRODUCER_SCRATCH_PREFIXES,
   resolveMergeDestinations,
 } from "./workspace.ts";
 
@@ -668,18 +669,32 @@ async function runGuardedRound(
   try {
     let prepared;
     try {
+      const baselineCaps = producerSnapshotCaps(input.deps, "workspace_baseline");
       prepared = await prepareProducerWorkspace({
         repoRoot: input.repoRoot,
         writeScope: input.writeScope,
-        supportScope: PRODUCER_SUPPORT_SCOPE,
+        ...(baselineCaps === undefined ? {} : { snapshotCaps: baselineCaps }),
       });
       workspaceRoot = prepared.workspaceRoot;
+    } catch (error) {
+      return {
+        kind: "stop",
+        reason: error instanceof SnapshotCapError ? "reviewer_isolation_unavailable" : "producer_failure",
+        diagnostic: buildProducerDiagnostic({
+          stage: "write_scope_lock",
+          writeScopeCode: error instanceof ProducerWriteScopeError ? error.code : null,
+          snapshotSite: error instanceof SnapshotCapError ? "workspace_baseline" : null,
+          snapshotCap: error instanceof SnapshotCapError ? error.cap : null,
+        }),
+      };
+    }
+    try {
       await input.adapter.lockProducerIsolation(input.repoRoot, workspaceRoot);
       isolationLocked = true;
     } catch (error) {
       return {
         kind: "stop",
-        reason: error instanceof SnapshotCapError ? "reviewer_isolation_unavailable" : "producer_failure",
+        reason: "producer_failure",
         diagnostic: buildProducerDiagnostic({
           stage: "write_scope_lock",
           writeScopeCode: error instanceof ProducerWriteScopeError ? error.code : null,
@@ -688,12 +703,22 @@ async function runGuardedRound(
     }
 
     let productBefore: TreeSnapshot;
+    try {
+      productBefore = await snapshotTree(input.repoRoot, {
+        policy: "producer",
+        ...producerSnapshotCaps(input.deps, "repo_before"),
+      });
+    } catch (error) {
+      return producerSnapshotStop("repo_before", error);
+    }
     let runtimeBefore: TreeSnapshot;
     try {
-      productBefore = await snapshotTree(input.repoRoot, { policy: "producer", ...input.deps.snapshotCaps });
-      runtimeBefore = await snapshotRuntimeOwnership(input.repoRoot);
+      runtimeBefore = await snapshotRuntimeOwnership(
+        input.repoRoot,
+        producerSnapshotCaps(input.deps, "runtime_before"),
+      );
     } catch (error) {
-      return { kind: "stop", reason: mapProducerCaptureError(error), diagnostic: null };
+      return producerSnapshotStop("runtime_before", error);
     }
 
     if (input.signal?.aborted) {
@@ -729,14 +754,33 @@ async function runGuardedRound(
     }
 
     let copyAfter: TreeSnapshot;
+    try {
+      copyAfter = await snapshotTree(workspaceRoot, {
+        ...producerSnapshotCaps(input.deps, "workspace_after"),
+        policy: "workspace",
+        collapsePrefixes: prepared.supportScope,
+        omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+      });
+    } catch (error) {
+      return producerSnapshotStop("workspace_after", error);
+    }
     let productAfter: TreeSnapshot;
+    try {
+      productAfter = await snapshotTree(input.repoRoot, {
+        policy: "producer",
+        ...producerSnapshotCaps(input.deps, "repo_after"),
+      });
+    } catch (error) {
+      return producerSnapshotStop("repo_after", error);
+    }
     let runtimeAfter: TreeSnapshot;
     try {
-      copyAfter = await snapshotTree(workspaceRoot, { policy: "workspace" });
-      productAfter = await snapshotTree(input.repoRoot, { policy: "producer", ...input.deps.snapshotCaps });
-      runtimeAfter = await snapshotRuntimeOwnership(input.repoRoot);
+      runtimeAfter = await snapshotRuntimeOwnership(
+        input.repoRoot,
+        producerSnapshotCaps(input.deps, "runtime_after"),
+      );
     } catch (error) {
-      return { kind: "stop", reason: mapProducerCaptureError(error), diagnostic: null };
+      return producerSnapshotStop("runtime_after", error);
     }
 
     if (input.signal?.aborted) {
@@ -788,7 +832,7 @@ async function runGuardedRound(
         baseline: prepared.baseline,
         after: copyAfter,
         writeScope: input.writeScope,
-        supportScope: PRODUCER_SUPPORT_SCOPE,
+        supportScope: prepared.supportScope,
       });
       destinations = await resolveMergeDestinations({ repoRoot: input.repoRoot, captured });
     } catch (error) {
@@ -850,6 +894,32 @@ function mapProducerCaptureError(error: unknown): ReasonCode {
   return error instanceof SnapshotCapError ? "reviewer_isolation_unavailable" : "adapter_error";
 }
 
+function producerSnapshotStop(site: ProducerSnapshotSite, error: unknown): GuardedRoundOutcome {
+  return {
+    kind: "stop",
+    reason: mapProducerCaptureError(error),
+    diagnostic: buildProducerDiagnostic({
+      stage: "capture",
+      snapshotSite: site,
+      snapshotCap: error instanceof SnapshotCapError ? error.cap : null,
+    }),
+  };
+}
+
+function producerSnapshotCaps(
+  deps: AppDeps,
+  site: ProducerSnapshotSite,
+): { entries?: number; hashBytes?: number } | undefined {
+  const siteCaps = deps.producerSnapshotCaps?.[site];
+  if (site !== "repo_before" && site !== "repo_after") {
+    return siteCaps;
+  }
+  if (deps.snapshotCaps === undefined) {
+    return siteCaps;
+  }
+  return { ...deps.snapshotCaps, ...siteCaps };
+}
+
 function sanitizeExitCode(value: number | null): number | null {
   return isFiniteIntegerExitCode(value) ? value : null;
 }
@@ -883,14 +953,17 @@ function producerAdapterThrowDiagnostic(stage: "spawn" | "wait", error: unknown)
   return buildProducerDiagnostic({ stage });
 }
 
-async function snapshotRuntimeOwnership(repoRoot: string): Promise<TreeSnapshot> {
+async function snapshotRuntimeOwnership(
+  repoRoot: string,
+  caps?: { entries?: number; hashBytes?: number },
+): Promise<TreeSnapshot> {
   const bridgeDir = path.join(repoRoot, ".spartan-bridge");
   try {
     await fs.lstat(bridgeDir);
   } catch {
     return { entries: new Map() };
   }
-  return snapshotTree(bridgeDir, { policy: "workspace" });
+  return snapshotTree(bridgeDir, { ...caps, policy: "workspace" });
 }
 
 type OkAgentsPolicy = Extract<AgentsPolicyParse, { ok: true }>;

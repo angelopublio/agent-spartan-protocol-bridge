@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import {
+  buildProducerDiagnostic,
+  PRODUCER_SNAPSHOT_CAPS,
+  PRODUCER_SNAPSHOT_SITES,
+} from "../src/core/contracts.ts";
+import {
   canonicalPolicyJson,
   parseStatusJson,
   parseTransitionStatusJson,
@@ -351,7 +356,7 @@ test("serializeTransitionStatus emits a null producer_diagnostic unchanged", () 
   assert.equal(parsed.producer_diagnostic, null);
 });
 
-test("serializeTransitionStatus and serializeTransitionEvent copy only the seven whitelisted producer_diagnostic keys", () => {
+test("serializeTransitionStatus and serializeTransitionEvent copy only the nine whitelisted producer_diagnostic keys", () => {
   const diagnostic: ProducerDiagnostic = {
     stage: "spawn",
     exit_code: 17,
@@ -360,6 +365,8 @@ test("serializeTransitionStatus and serializeTransitionEvent copy only the seven
     adapter_phase: "start",
     adapter_cause: "spawn_failed",
     waited_ms: null,
+    snapshot_site: null,
+    snapshot_cap: null,
   };
   const statusRaw = serializeTransitionStatus(baseTransitionStatus(diagnostic));
   const parsedStatus = JSON.parse(statusRaw) as TransitionStatusDocument;
@@ -371,6 +378,8 @@ test("serializeTransitionStatus and serializeTransitionEvent copy only the seven
     "adapter_phase",
     "adapter_cause",
     "waited_ms",
+    "snapshot_site",
+    "snapshot_cap",
   ]);
   assert.deepEqual(parsedStatus.producer_diagnostic, diagnostic);
 
@@ -407,6 +416,8 @@ test("serializeTransitionStatus rejects injected secret/prose/path properties an
     path: "/etc/passwd",
     model: "SECRET_MODEL",
     account: "SECRET_ACCOUNT",
+    snapshot_site: "not_a_site",
+    snapshot_cap: "not_a_cap",
   } as unknown as ProducerDiagnostic;
   const raw = serializeTransitionStatus(baseTransitionStatus(poisoned));
   assert.equal(raw.includes("SECRET"), false);
@@ -420,6 +431,8 @@ test("serializeTransitionStatus rejects injected secret/prose/path properties an
     "adapter_phase",
     "adapter_cause",
     "waited_ms",
+    "snapshot_site",
+    "snapshot_cap",
   ]);
 });
 
@@ -435,6 +448,8 @@ test("serializeTransitionStatus nulls an out-of-enum stage to a whole-record nul
     write_scope_code: "not_a_real_code",
     adapter_phase: "not_a_real_phase",
     adapter_cause: "not_a_real_cause",
+    snapshot_site: "not_a_real_site",
+    snapshot_cap: "not_a_real_cap",
   } as unknown as ProducerDiagnostic;
   const rawBadFields = serializeTransitionStatus(baseTransitionStatus(badFields));
   const parsedBadFields = JSON.parse(rawBadFields) as TransitionStatusDocument;
@@ -446,7 +461,61 @@ test("serializeTransitionStatus nulls an out-of-enum stage to a whole-record nul
     adapter_phase: null,
     adapter_cause: null,
     waited_ms: null,
+    snapshot_site: null,
+    snapshot_cap: null,
   });
+});
+
+test("buildProducerDiagnostic rejects out-of-domain snapshot fields", () => {
+  assert.throws(
+    () => buildProducerDiagnostic({ stage: "capture", snapshotSite: "somewhere" as never }),
+    TypeError,
+  );
+  assert.throws(
+    () => buildProducerDiagnostic({ stage: "capture", snapshotCap: "files" as never }),
+    TypeError,
+  );
+  assert.deepEqual(buildProducerDiagnostic({
+    stage: "capture",
+    snapshotSite: "workspace_after",
+    snapshotCap: "entries",
+  }), {
+    stage: "capture",
+    exit_code: null,
+    timed_out: false,
+    write_scope_code: null,
+    adapter_phase: null,
+    adapter_cause: null,
+    waited_ms: null,
+    snapshot_site: "workspace_after",
+    snapshot_cap: "entries",
+  });
+});
+
+test("all six producer snapshot sites and both cap values survive the closed serializer", () => {
+  assert.deepEqual([...PRODUCER_SNAPSHOT_SITES], [
+    "workspace_baseline",
+    "repo_before",
+    "runtime_before",
+    "workspace_after",
+    "repo_after",
+    "runtime_after",
+  ]);
+  assert.deepEqual([...PRODUCER_SNAPSHOT_CAPS], ["entries", "hash_bytes"]);
+  for (const site of PRODUCER_SNAPSHOT_SITES) {
+    for (const cap of PRODUCER_SNAPSHOT_CAPS) {
+      const diagnostic = buildProducerDiagnostic({
+        stage: site === "workspace_baseline" ? "write_scope_lock" : "capture",
+        snapshotSite: site,
+        snapshotCap: cap,
+      });
+      const serialized = JSON.parse(
+        serializeTransitionStatus(baseTransitionStatus(diagnostic)),
+      ) as TransitionStatusDocument;
+      assert.equal(serialized.producer_diagnostic?.snapshot_site, site);
+      assert.equal(serialized.producer_diagnostic?.snapshot_cap, cap);
+    }
+  }
 });
 
 test("parseTransitionStatusJson normalizes a missing producer_diagnostic key to null and leaves old bytes otherwise readable", () => {
@@ -540,7 +609,7 @@ test("parseStatusJson does not throw on an unknown state string", () => {
   assert.equal(parsed.state, "not_a_run_state");
 });
 
-test("parseTransitionStatusJson leaves a present producer_diagnostic untouched", () => {
+test("parseTransitionStatusJson normalizes new keys on an older present producer_diagnostic", () => {
   const diagnostic: ProducerDiagnostic = {
     stage: "write_scope_lock",
     exit_code: null,
@@ -549,8 +618,12 @@ test("parseTransitionStatusJson leaves a present producer_diagnostic untouched",
     adapter_phase: null,
     adapter_cause: null,
     waited_ms: null,
-  };
-  const raw = serializeTransitionStatus(baseTransitionStatus(diagnostic));
+  } as ProducerDiagnostic;
+  const raw = JSON.stringify(baseTransitionStatus(diagnostic));
   const parsed = parseTransitionStatusJson(raw);
-  assert.deepEqual(parsed.producer_diagnostic, diagnostic);
+  assert.deepEqual(parsed.producer_diagnostic, {
+    ...diagnostic,
+    snapshot_site: null,
+    snapshot_cap: null,
+  });
 });

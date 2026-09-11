@@ -302,6 +302,19 @@ test("snapshot hash-byte cap overflow throws SnapshotCapError", async () => {
   await fs.writeFile(path.join(root, "b.bin"), Buffer.alloc(64, 2));
   await assert.rejects(() => snapshotTree(root, { hashBytes: 80 }), (error: unknown) => {
     assert.equal(error instanceof SnapshotCapError, true);
+    assert.equal((error as SnapshotCapError).cap, "hash_bytes");
+    return true;
+  });
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("snapshot entry cap overflow identifies the entries cap", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-entry-cap-"));
+  await fs.writeFile(path.join(root, "a"), "a");
+  await fs.writeFile(path.join(root, "b"), "b");
+  await assert.rejects(() => snapshotTree(root, { entries: 2 }), (error: unknown) => {
+    assert.equal(error instanceof SnapshotCapError, true);
+    assert.equal((error as SnapshotCapError).cap, "entries");
     return true;
   });
   await fs.rm(root, { recursive: true, force: true });

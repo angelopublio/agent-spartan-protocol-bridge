@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { SNAPSHOT_DIFF_FIELDS, type SnapshotDiffEntry, type SnapshotDiffField } from "./contracts.ts";
+import {
+  SNAPSHOT_DIFF_FIELDS,
+  type ProducerSnapshotCap,
+  type SnapshotDiffEntry,
+  type SnapshotDiffField,
+} from "./contracts.ts";
 import { sha256Bytes } from "./serialize.ts";
 import { unicodeDefaultCaseFold } from "./unicode-casefold.ts";
 
@@ -33,6 +38,8 @@ export type SnapshotTreeCaps = {
   entries?: number;
   hashBytes?: number;
   policy?: SnapshotPolicy;
+  collapsePrefixes?: readonly string[];
+  omitPrefixes?: readonly string[];
 };
 
 export type SnapshotEntryKind = "file" | "directory" | "symlink" | "other";
@@ -53,7 +60,7 @@ export type TreeSnapshot = {
 
 export class SnapshotCapError extends Error {
   override readonly name = "SnapshotCapError";
-  constructor() {
+  constructor(readonly cap: ProducerSnapshotCap) {
     super("reviewer_isolation_unavailable");
   }
 }
@@ -64,6 +71,8 @@ type WalkState = {
   entryCap: number;
   hashByteCap: number;
   policy: SnapshotPolicy;
+  collapsePrefixes: readonly string[];
+  omitPrefixes: readonly string[];
 };
 
 export async function snapshotTree(
@@ -77,6 +86,8 @@ export async function snapshotTree(
     entryCap: caps?.entries ?? SNAPSHOT_ENTRY_CAP,
     hashByteCap: caps?.hashBytes ?? SNAPSHOT_HASH_BYTE_CAP,
     policy: caps?.policy ?? "repository",
+    collapsePrefixes: caps?.collapsePrefixes ?? [],
+    omitPrefixes: caps?.omitPrefixes ?? [],
   };
   const rootStat = await fs.lstat(realRoot);
   state.entries.set(".", {
@@ -97,12 +108,19 @@ async function walk(absDir: string, relDir: string, state: WalkState): Promise<v
     }
     const rel = relDir.length === 0 ? dirent.name : `${relDir}/${dirent.name}`;
     const abs = path.join(absDir, dirent.name);
+    if (state.omitPrefixes.some((prefix) => isPrefixMember(rel, prefix))) {
+      continue;
+    }
+    if (state.collapsePrefixes.some((prefix) => isPrefixMember(rel, prefix))) {
+      await recordCollapsedEntry(abs, rel, state);
+      continue;
+    }
     if (state.policy === "producer" && SKIPPED_DIR_NAMES.has(dirent.name)) {
       await recordSkippedProducerEntry(abs, rel, state);
       continue;
     }
     if (state.entries.size >= state.entryCap) {
-      throw new SnapshotCapError();
+      throw new SnapshotCapError("entries");
     }
     const stat = await fs.lstat(abs);
     const mode = stat.mode & 0o7777;
@@ -136,7 +154,7 @@ async function walk(absDir: string, relDir: string, state: WalkState): Promise<v
       const hashFully = state.policy === "workspace" || stat.size <= SNAPSHOT_HASH_FILE_CAP;
       if (hashFully) {
         if (state.hashedBytes + stat.size > state.hashByteCap) {
-          throw new SnapshotCapError();
+          throw new SnapshotCapError("hash_bytes");
         }
         const bytes = new Uint8Array(await fs.readFile(abs));
         entry.hash = sha256Bytes(bytes);
@@ -157,20 +175,32 @@ async function walk(absDir: string, relDir: string, state: WalkState): Promise<v
 }
 
 async function recordSkippedProducerEntry(abs: string, rel: string, state: WalkState): Promise<void> {
+  return recordCollapsedEntry(abs, rel, state, false);
+}
+
+async function recordCollapsedEntry(
+  abs: string,
+  rel: string,
+  state: WalkState,
+  includeLeafDigest = true,
+): Promise<void> {
   if (state.entries.size >= state.entryCap) {
-    throw new SnapshotCapError();
+    throw new SnapshotCapError("entries");
   }
   const stat = await fs.lstat(abs);
   const mode = stat.mode & 0o7777;
   if (stat.isSymbolicLink()) {
-    state.entries.set(rel, {
+    const linkTarget = await fs.readlink(abs);
+    const entry: SnapshotEntry = {
       rel,
       kind: "symlink",
       mode,
       size: stat.size,
       mtimeNs: mtimeNs(stat),
-      linkTarget: await fs.readlink(abs),
-    });
+      linkTarget,
+    };
+    if (includeLeafDigest) entry.hash = metadataEntryDigest("symlink", stat, linkTarget);
+    state.entries.set(rel, entry);
     return;
   }
   if (stat.isDirectory()) {
@@ -180,27 +210,46 @@ async function recordSkippedProducerEntry(abs: string, rel: string, state: WalkS
       mode,
       size: stat.size,
       mtimeNs: mtimeNs(stat),
-      hash: await metadataTreeDigest(abs),
+      hash: await metadataTreeDigest(abs, rel, state.omitPrefixes),
     });
     return;
   }
   if (stat.isFile()) {
-    state.entries.set(rel, {
+    const entry: SnapshotEntry = {
       rel,
       kind: "file",
       mode,
       size: stat.size,
       mtimeNs: mtimeNs(stat),
-    });
+    };
+    if (includeLeafDigest) entry.hash = metadataEntryDigest("file", stat);
+    state.entries.set(rel, entry);
     return;
   }
-  state.entries.set(rel, {
+  const entry: SnapshotEntry = {
     rel,
     kind: "other",
     mode,
     size: stat.size,
     mtimeNs: mtimeNs(stat),
-  });
+  };
+  if (includeLeafDigest) entry.hash = metadataEntryDigest("other", stat);
+  state.entries.set(rel, entry);
+}
+
+function metadataEntryDigest(
+  kind: SnapshotEntryKind,
+  stat: { mode: number; size: number; mtimeNs?: bigint; mtimeMs: number; ctimeNs?: bigint; ctimeMs: number },
+  linkTarget = "",
+): string {
+  return sha256Bytes([
+    kind,
+    String(stat.mode & 0o7777),
+    String(stat.size),
+    mtimeNs(stat),
+    ctimeNs(stat),
+    linkTarget,
+  ].join("\0"));
 }
 
 export function producerPathDenied(posix: string): boolean {
@@ -215,37 +264,57 @@ export function producerPathDenied(posix: string): boolean {
   return false;
 }
 
-async function metadataTreeDigest(absDir: string): Promise<string> {
+async function metadataTreeDigest(
+  absDir: string,
+  snapshotRel: string = "",
+  omitPrefixes: readonly string[] = [],
+): Promise<string> {
   const parts: string[] = [];
-  await collectMetadataRecords(absDir, "", parts);
+  await collectMetadataRecords(absDir, "", snapshotRel, omitPrefixes, parts);
   parts.sort();
   return sha256Bytes(parts.join("\n"));
 }
 
-async function collectMetadataRecords(absDir: string, relDir: string, parts: string[]): Promise<void> {
+async function collectMetadataRecords(
+  absDir: string,
+  relDir: string,
+  snapshotRel: string,
+  omitPrefixes: readonly string[],
+  parts: string[],
+): Promise<void> {
   const dirents = await fs.readdir(absDir, { withFileTypes: true });
   for (const dirent of dirents) {
     const rel = relDir.length === 0 ? dirent.name : `${relDir}/${dirent.name}`;
+    const wholeRel = snapshotRel.length === 0 ? rel : `${snapshotRel}/${rel}`;
+    if (omitPrefixes.some((prefix) => isPrefixMember(wholeRel, prefix))) {
+      continue;
+    }
     const abs = path.join(absDir, dirent.name);
     const stat = await fs.lstat(abs);
     const mode = String(stat.mode & 0o7777);
     const size = String(stat.size);
     const stamp = mtimeNs(stat);
+    const changeStamp = ctimeNs(stat);
     if (stat.isSymbolicLink()) {
-      parts.push(["symlink", rel, mode, size, stamp, await fs.readlink(abs)].join("\0"));
+      parts.push(["symlink", rel, mode, size, stamp, changeStamp, await fs.readlink(abs)].join("\0"));
       continue;
     }
     if (stat.isDirectory()) {
-      parts.push(["directory", rel, mode, size, stamp, ""].join("\0"));
-      await collectMetadataRecords(abs, rel, parts);
+      parts.push(["directory", rel, mode, size, stamp, changeStamp, ""].join("\0"));
+      await collectMetadataRecords(abs, rel, snapshotRel, omitPrefixes, parts);
       continue;
     }
     if (stat.isFile()) {
-      parts.push(["file", rel, mode, size, stamp, ""].join("\0"));
+      parts.push(["file", rel, mode, size, stamp, changeStamp, ""].join("\0"));
       continue;
     }
-    parts.push(["other", rel, mode, size, stamp, ""].join("\0"));
+    parts.push(["other", rel, mode, size, stamp, changeStamp, ""].join("\0"));
   }
+}
+
+export function isPrefixMember(posix: string, prefix: string): boolean {
+  const root = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  return posix === root || posix.startsWith(`${root}/`);
 }
 
 function mtimeNs(stat: { mtimeNs?: bigint; mtimeMs: number }): string {
@@ -253,6 +322,13 @@ function mtimeNs(stat: { mtimeNs?: bigint; mtimeMs: number }): string {
     return stat.mtimeNs.toString();
   }
   return Math.round(stat.mtimeMs * 1e6).toString();
+}
+
+function ctimeNs(stat: { ctimeNs?: bigint; ctimeMs: number }): string {
+  if (typeof stat.ctimeNs === "bigint") {
+    return stat.ctimeNs.toString();
+  }
+  return Math.round(stat.ctimeMs * 1e6).toString();
 }
 
 export function snapshotDiff(
