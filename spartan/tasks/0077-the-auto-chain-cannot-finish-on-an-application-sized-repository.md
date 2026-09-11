@@ -72,18 +72,34 @@ and then fails on their count.
   change the merge outcome. Establish whether it can, before omitting anything.
 - Omission must be derived from the same support-scope value the workspace was built from, never a
   second hardcoded list that can drift from it.
-- A stop on this path currently carries `diagnostic: null`. Whatever the fix, the operator must be
-  able to tell which snapshot failed and which cap it exceeded, without re-running anything.
+- A stop on this path currently carries `diagnostic: null`, so it names neither which of the three
+  snapshots in that block failed nor which of the two caps was exceeded. Diagnosing the observed
+  failure required reading the source and reasoning from elapsed time; the next operator must not
+  have to. Whatever the fix, the stop records the failing snapshot and the exceeded cap, in closed
+  values, and this is part of the change rather than a follow-up: the fix already edits that exact
+  stop site, and leaving it mute there while three queued tasks ask for the same thing elsewhere
+  would be a deliberate inconsistency.
 
 ## Decisions
 
-To be settled by the planner round. The candidate direction, for the reviewer to accept or refuse:
-the capture omits support-scope paths, because the merge already discards them, so omitting them
-changes no outcome and removes both the cap pressure and the wasted walk.
+To be settled by the planner round. Two candidate directions, for the reviewer to accept or refuse.
+
+The capture omits support-scope paths, because the merge already discards them, so omitting them
+changes no outcome and removes both the cap pressure and the wasted walk. Raising the cap is refused
+even though it would make the chain complete: the walk would still hash every file of a dependency
+tree on every run and throw the result away, so the defect would become slow rather than fatal. The
+observed failure spent three minutes and forty-three seconds mostly in that walk.
+
+The stop records which snapshot failed and which cap it exceeded, as closed values carried on the
+existing diagnostic record rather than as prose.
 
 ## Acceptance Criteria
 
-To be derived from the decisions, last.
+To be derived from the decisions, last. Two are already implied by the constraints and will be
+re-derived rather than copied: a capture stop names its failing snapshot and its exceeded cap in
+closed values; and the evidence measures the elapsed time a capture takes before and after the
+omission on a tree large enough to have failed, so the change is shown to remove the cost and not
+only the failure.
 
 ## Work Completed
 
