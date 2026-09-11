@@ -127,6 +127,9 @@ export const CURSOR_FORBIDDEN_ARGV_TOKENS = [
 // (via the "credential" token), so childEnvironment consults a one-element
 // exception set; the value is additionally guarded to the closed selector enum
 // so an injected or unexpected value is dropped, not forwarded.
+// AGENT_PROFILES_REAL_HOME is likewise only forwarded from the parent. A
+// machine-local wrapper uses it to restore HOME for a nested official client;
+// the Bridge never reads, defaults, or originates the value.
 export const CURSOR_ENV_ALLOWLIST = [
   "PATH",
   "HOME",
@@ -135,6 +138,7 @@ export const CURSOR_ENV_ALLOWLIST = [
   "LC_ALL",
   "TERM",
   "AGENT_CLI_CREDENTIAL_STORE",
+  "AGENT_PROFILES_REAL_HOME",
 ] as const;
 export const CURSOR_ENV_SENSITIVE_NAME_EXCEPTIONS = new Set(["AGENT_CLI_CREDENTIAL_STORE"]);
 export const AGENT_CLI_CREDENTIAL_STORE_VALUES = new Set(["file", "keychain"]);

@@ -12,6 +12,7 @@ export type AgentsPolicyParse =
       ok: true;
       host: CanonicalHost;
       client_context: string;
+      declared_client_contexts: readonly string[];
       model: string;
       effort: EffortLevel;
       automatic_review_authorized: true;
@@ -161,6 +162,7 @@ export function parseAgentsPolicy(markdown: string): AgentsPolicyParse {
     ok: true,
     host: hosts.host,
     client_context: hosts.client_context,
+    declared_client_contexts: hosts.declared_client_contexts,
     model: hosts.model,
     effort: hosts.effort,
     automatic_review_authorized: true,
@@ -192,6 +194,7 @@ function parseAgentHostsSection(
       ok: true;
       host: CanonicalHost;
       client_context: string;
+      declared_client_contexts: readonly string[];
       model: string;
       effort: EffortLevel;
       implementation: ReviewerBinding | null;
@@ -251,6 +254,7 @@ function parseAgentHostsSection(
   let implementationRow: { host: string; context: string; model: string; effort: EffortLevel } | undefined;
   let implementerRow: { host: string; context: string; model: string; effort: EffortLevel } | undefined;
   let plannerRow: { host: string; context: string; model: string; effort: EffortLevel } | undefined;
+  const declaredClientContexts: string[] = [];
   for (const row of table.rows) {
     if (row.length !== 5) {
       return fail(
@@ -293,6 +297,9 @@ function parseAgentHostsSection(
       );
     }
     bindings.add(binding);
+    if (isValidClientContextAlias(context)) {
+      declaredClientContexts.push(context);
+    }
     if (binding === "reviewer.plan") {
       planRow = { host, context, model, effort };
     }
@@ -363,6 +370,7 @@ function parseAgentHostsSection(
     ok: true,
     host: planBinding.binding.host,
     client_context: planBinding.binding.client_context,
+    declared_client_contexts: declaredClientContexts,
     model: planBinding.binding.model,
     effort: planBinding.binding.effort,
     implementation,

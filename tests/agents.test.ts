@@ -165,6 +165,12 @@ test("empty client context resolves to default", () => {
   assert.equal(parsed.ok, true);
   if (parsed.ok) {
     assert.equal(parsed.client_context, "default");
+    assert.deepEqual(parsed.declared_client_contexts, ["personal", "personal"]);
+  }
+  const explicit = parseAgentsPolicy(validAgentsMd({ context: "default" }));
+  assert.equal(explicit.ok, true);
+  if (explicit.ok) {
+    assert.deepEqual(explicit.declared_client_contexts, ["personal", "default", "personal", "default"]);
   }
 });
 
@@ -661,6 +667,7 @@ test("declaration paragraph copies are identical and parse-invariant", { skip: I
     ok: true,
     host: "codex",
     client_context: "personal",
+    declared_client_contexts: ["personal", "personal", "personal", "personal"],
     model: "gpt-5.6-sol",
     effort: "high",
     automatic_review_authorized: true,

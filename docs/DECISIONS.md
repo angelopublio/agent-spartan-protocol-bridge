@@ -1434,3 +1434,42 @@ isolation lock is therefore established before `repo_before` and
 `runtime_before`. Snapshot-cap stops now carry closed `snapshot_site` and
 `snapshot_cap` values, distinguishing all six walks and the `entries` versus
 `hash_bytes` limits.
+
+## D-075 — Producer workspaces carry repository client context (task 0079)
+
+**Decision:** On 2026-09-11, producer preparation began copying the repository-root
+`AGENTS.md` byte-for-byte to the root of the temporary producer workspace at mode
+`0444`, after product and support copies and before the baseline snapshot. The
+authority file is a regular baseline entry, not part of `PRODUCER_SUPPORT_SCOPE`;
+producer placement, scratch classification, merge classification, adapter cwd /
+`--workspace`, and the Darwin profile remain unchanged. Existing merge guards
+refuse content, mode, or deletion changes to the carried authority file as
+`write_scope_violation`, while the live repository authority file remains under
+the profile's final repository deny clauses.
+
+Cursor also forwards `AGENT_PROFILES_REAL_HOME` only when the parent already
+exports it. That adjacent selector supports a nested official client launched
+from a relocated-`HOME` Cursor session; the Bridge never reads, defaults, or
+originates it, and this forwarding is not the producer-context fix. `doctor`
+now examines the implementer binding's wrapper launcher. When that producer
+launcher is wrapper-shaped and the parsed Agent hosts bindings declare multiple
+distinct non-empty client-context cells, it emits one binding-named ambiguity
+warning derived from the launcher text and the table, without resolving or
+reporting an account. An omitted cell is not counted as the normalized
+`default`; an explicitly written `default` is counted. The ambiguity diagnostic
+is appended without suppressing the wrapper's other shape warnings.
+
+**Rationale:** A producer must remain outside the repository so the final
+repository write denies stay effective, but a working-directory profile resolver
+walking upward from `os.tmpdir()` cannot see the repository declaration. Every
+review workspace already carries that declaration. Moving the producer workspace
+would weaken or defeat the deny without helping an out-of-repository placement,
+and forwarding selectors alone cannot help when the parent does not hold them.
+
+**Consequence:** A single-context repository gives every producer adapter the
+same repository client-context input reviewers already receive, without copying
+credentials or changing sandbox reach. A multi-context Agent hosts table remains
+ambiguous and is reported before a round. D-055 remains the Codex-specific review
+shortcut (`CODEX_HOME` forwarding plus review cwd); D-075 supplies the general,
+host-neutral declaration that lets a cwd resolver land correctly in a temporary
+producer workspace even when no selector is present.

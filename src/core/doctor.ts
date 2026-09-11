@@ -427,7 +427,14 @@ function homeRestoreArmed(host: CanonicalHost, env: NodeJS.ProcessEnv): boolean 
   return false;
 }
 
-export async function wrapperLauncherWarnings(host: CanonicalHost, env: NodeJS.ProcessEnv): Promise<string[]> {
+export async function wrapperLauncherWarnings(
+  host: CanonicalHost,
+  env: NodeJS.ProcessEnv,
+  options: {
+    binding?: BindingAdapterName | CanonicalHost;
+    declaredClientContexts?: readonly string[];
+  } = {},
+): Promise<string[]> {
   const executableName = HOST_EXECUTABLE[host];
   if (executableName === undefined) {
     return [];
@@ -445,7 +452,13 @@ export async function wrapperLauncherWarnings(host: CanonicalHost, env: NodeJS.P
   if (!text.startsWith("#!") || (!text.includes("resolve-profile") && !text.includes("wrap-official-client"))) {
     return [];
   }
+  const binding = options.binding ?? host;
   const warnings: string[] = [];
+  if (new Set(options.declaredClientContexts ?? []).size > 1) {
+    warnings.push(
+      `binding ${binding}: wrapper launcher ${executableName} cannot resolve a unique client context because the Agent hosts table declares more than one distinct client context`,
+    );
+  }
   const scriptDir = path.dirname(executablePath);
   const profilesRoot = path.dirname(scriptDir);
   const resolveProfile = env.AGENT_PROFILES_RESOLVE ?? path.join(profilesRoot, "resolve-profile");
@@ -453,13 +466,13 @@ export async function wrapperLauncherWarnings(host: CanonicalHost, env: NodeJS.P
     await fs.access(resolveProfile);
   } catch {
     warnings.push(
-      `binding ${host}: wrapper launcher ${executableName} references resolve-profile but ${resolveProfile} does not exist from the current environment`,
+      `binding ${binding}: wrapper launcher ${executableName} references resolve-profile but ${resolveProfile} does not exist from the current environment`,
     );
   }
   const home = env.HOME ?? "";
   if (host === "claude" && CURSOR_HOME_PATH.test(home) && !homeRestoreArmed(host, env)) {
     warnings.push(
-      `binding ${host}: HOME matches a cursor-home path while the reviewer host is Claude Code; the launcher environment may not match what the wrapper expects`,
+      `binding ${binding}: HOME matches a cursor-home path while the reviewer host is Claude Code; the launcher environment may not match what the wrapper expects`,
     );
   }
   return warnings;
@@ -473,17 +486,24 @@ async function collectDoctorWarnings(
     return [];
   }
   const warnings: string[] = [];
-  const seen = new Set<CanonicalHost>();
+  const seenReviewerHosts = new Set<CanonicalHost>();
   for (const binding of bindings) {
-    if (binding.binding === "implementer") {
-      continue;
-    }
     const selected = reviewerBindingFromPolicy(parsed, binding.binding);
-    if (selected === null || seen.has(selected.host)) {
+    if (selected === null) {
       continue;
     }
-    seen.add(selected.host);
-    warnings.push(...(await wrapperLauncherWarnings(selected.host, process.env)));
+    if (binding.binding !== "implementer" && seenReviewerHosts.has(selected.host)) {
+      continue;
+    }
+    if (binding.binding !== "implementer") {
+      seenReviewerHosts.add(selected.host);
+    }
+    warnings.push(...(await wrapperLauncherWarnings(selected.host, process.env, {
+      binding: binding.binding,
+      ...(binding.binding === "implementer"
+        ? { declaredClientContexts: parsed.declared_client_contexts }
+        : {}),
+    })));
   }
   return warnings;
 }

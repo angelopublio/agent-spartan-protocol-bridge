@@ -35,6 +35,7 @@ export const PATCH_BYTE_CAP = 1024 * 1024;
 export const REVIEWER_WORKSPACE_DIR = "reviewer-workspace";
 export const REVIEWER_ODB_DIR = "reviewer-odb";
 export const WORKTREE_PREFIX = "worktree";
+export const PRODUCER_AUTHORITY_FILE = "AGENTS.md" as const;
 export const PRODUCER_SUPPORT_SCOPE = ["node_modules/"] as const;
 export const PRODUCER_SCRATCH_PREFIXES = ["dist/", "node_modules/.cache/"] as const;
 export const PRODUCER_MERGE_ENTRY_CAP = 2_000;
@@ -1153,6 +1154,14 @@ export async function prepareProducerWorkspace(
         await copyProducerTree(repoRoot, workspaceRoot, rel, false, true, deps.safeReadSeam);
       }
     }
+    await copyExactProducerFile(
+      repoRoot,
+      workspaceRoot,
+      PRODUCER_AUTHORITY_FILE,
+      deps.safeReadSeam,
+      true,
+      0o444,
+    );
     await ensureWritableSupportScratch(workspaceRoot, supportRules);
     const baseline = await snapshotTree(workspaceRoot, {
       ...input.snapshotCaps,
@@ -1198,6 +1207,7 @@ async function copyExactProducerFile(
   rel: string,
   seam?: SafeReadSeam,
   readOnly = false,
+  modeOverride?: number,
 ): Promise<void> {
   const parts = validateRepositoryPath(rel).split("/");
   let sourceParent = sourceRoot;
@@ -1235,6 +1245,7 @@ async function copyExactProducerFile(
       path.join(destinationParent, leaf),
       readOnly,
       seam,
+      modeOverride,
     );
   } finally {
     for (const ancestor of [...ancestors].reverse()) {
@@ -1328,11 +1339,12 @@ async function copyProducerRegularFile(
   destination: string,
   readOnly: boolean,
   seam?: SafeReadSeam,
+  modeOverride?: number,
 ): Promise<void> {
   const read = safeReadProducerFile(source, seam);
   if (read === null) return;
   const sourceMode = Number.parseInt(read.gitMode, 8) & 0o777;
-  const mode = readOnly ? (0o444 | (sourceMode & 0o111)) : (sourceMode | 0o600);
+  const mode = modeOverride ?? (readOnly ? (0o444 | (sourceMode & 0o111)) : (sourceMode | 0o600));
   await fs.writeFile(destination, read.bytes, { flag: "wx", mode });
   await fs.chmod(destination, mode);
 }

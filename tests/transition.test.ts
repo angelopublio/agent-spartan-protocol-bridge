@@ -624,7 +624,9 @@ test("an implementer that writes AGENTS.md after an advisory scan still stops wr
       clock: testClock(PLAN_ID),
       createAdapter: () =>
         mutatingProducer(source, async (repo) => {
-          await fs.writeFile(path.join(repo, "AGENTS.md"), "pwned\n", "utf8");
+          const replacement = path.join(repo, "AGENTS.md.replacement");
+          await fs.writeFile(replacement, "pwned\n", { encoding: "utf8", mode: 0o444 });
+          await fs.rename(replacement, path.join(repo, "AGENTS.md"));
         }),
     }),
   );

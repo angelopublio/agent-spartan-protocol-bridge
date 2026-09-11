@@ -25,6 +25,32 @@ import {
 const GRANT = "A human-started Spartan Bridge run may start the mapped reviewer automatically.";
 const CYCLE = "The Bridge may return findings to the current planner session and repeat up to 3 plan-review cycles.";
 
+async function withProcessEnvironment<T>(
+  values: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prior = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(values)) {
+    prior.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of prior) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 function existingReportTail(formatted: string): string {
   const lines = formatted.split("\n");
   const registry = lines.findIndex((line) => line.startsWith("registry:"));
@@ -571,6 +597,98 @@ exec true
   await fs.writeFile(path.join(layoutRoot, "resolve-profile"), "#!/bin/sh\necho personal\n", { mode: 0o755 });
   const presentWarnings = await wrapperLauncherWarnings("claude", env);
   assert.equal(presentWarnings.length, 0);
+  await fs.rm(layoutRoot, { recursive: true, force: true });
+});
+
+test("doctor evaluates a wrapper-shaped implementer launcher and names that binding", async () => {
+  const { root } = await makeRepo({ agents: validAgentsMd({ implementerHost: "Codex" }) });
+  const layoutRoot = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-doctor-implementer-"));
+  const binDir = path.join(layoutRoot, "bin");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n# resolve-profile probe\nexec true\n", { mode: 0o755 });
+  try {
+    const report = await withProcessEnvironment(
+      { PATH: binDir, HOME: layoutRoot, AGENT_PROFILES_RESOLVE: undefined },
+      () => doctor(root, testDeps()),
+    );
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0] ?? "", /^binding implementer: wrapper launcher codex references resolve-profile/);
+    assert.match(formatDoctorReport(report), /binding implementer: adapter available; launcher=fake-reviewer-v1\nwarning: binding implementer:/);
+  } finally {
+    await fs.rm(layoutRoot, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("doctor counts only raw declared client contexts for wrapper ambiguity", async () => {
+  const multiple = await makeRepo({
+    agents: validAgentsMd({ context: "client-a", implementerHost: "Codex" }),
+  });
+  const single = await makeRepo({ agents: validAgentsMd({ implementerHost: "Codex" }) });
+  const omitted = await makeRepo({
+    agents: validAgentsMd({ implementerHost: "Codex" }).replace(
+      "| implementer | Codex | personal |",
+      "| implementer | Codex |  |",
+    ),
+  });
+  const explicitDefault = await makeRepo({
+    agents: validAgentsMd({ implementerHost: "Codex" }).replace(
+      "| implementer | Codex | personal |",
+      "| implementer | Codex | default |",
+    ),
+  });
+  const layoutRoot = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-doctor-contexts-"));
+  const binDir = path.join(layoutRoot, "bin");
+  const sensitiveResolvePath = path.join(layoutRoot, "private-account-profile", "resolve-profile");
+  const sensitiveMarker = path.join(layoutRoot, "private-account-home");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n# wrap-official-client probe\nexec true\n", { mode: 0o755 });
+  await fs.mkdir(path.dirname(sensitiveResolvePath), { recursive: true });
+  await fs.writeFile(sensitiveResolvePath, "#!/bin/sh\nexec true\n", { mode: 0o755 });
+  try {
+    const values = {
+      PATH: binDir,
+      HOME: layoutRoot,
+      AGENT_PROFILES_RESOLVE: sensitiveResolvePath,
+      AGENT_PROFILES_REAL_HOME: sensitiveMarker,
+      CODEX_HOME: path.join(sensitiveMarker, ".codex"),
+    };
+    const multipleReport = await withProcessEnvironment(values, () => doctor(multiple.root, testDeps()));
+    assert.deepEqual(multipleReport.warnings, [
+      "binding implementer: wrapper launcher codex cannot resolve a unique client context because the Agent hosts table declares more than one distinct client context",
+    ]);
+    assert.doesNotMatch(multipleReport.warnings[0] ?? "", /private-account|credential|keychain|auth\.json/);
+
+    const singleReport = await withProcessEnvironment(values, () => doctor(single.root, testDeps()));
+    assert.deepEqual(singleReport.warnings, []);
+    const omittedReport = await withProcessEnvironment(values, () => doctor(omitted.root, testDeps()));
+    assert.deepEqual(omittedReport.warnings, []);
+    const explicitDefaultReport = await withProcessEnvironment(values, () => doctor(explicitDefault.root, testDeps()));
+    assert.deepEqual(explicitDefaultReport.warnings, [
+      "binding implementer: wrapper launcher codex cannot resolve a unique client context because the Agent hosts table declares more than one distinct client context",
+    ]);
+  } finally {
+    await fs.rm(layoutRoot, { recursive: true, force: true });
+    await fs.rm(multiple.root, { recursive: true, force: true });
+    await fs.rm(single.root, { recursive: true, force: true });
+    await fs.rm(omitted.root, { recursive: true, force: true });
+    await fs.rm(explicitDefault.root, { recursive: true, force: true });
+  }
+});
+
+test("doctor appends wrapper-shape warnings after client-context ambiguity", async () => {
+  const layoutRoot = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-doctor-context-warning-"));
+  const binDir = path.join(layoutRoot, "bin");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n# resolve-profile probe\nexec true\n", { mode: 0o755 });
+  const warnings = await wrapperLauncherWarnings(
+    "codex",
+    { ...process.env, PATH: binDir, HOME: layoutRoot, AGENT_PROFILES_RESOLVE: path.join(layoutRoot, "missing-resolver") },
+    { binding: "implementer", declaredClientContexts: ["client-a", "client-b"] },
+  );
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0] ?? "", /more than one distinct client context/);
+  assert.match(warnings[1] ?? "", /resolve-profile.*does not exist/);
   await fs.rm(layoutRoot, { recursive: true, force: true });
 });
 

@@ -22,12 +22,15 @@ import {
   cleanupProducerWorkspace,
   isStructuralProducerDirectoryDiff,
   prepareProducerWorkspace,
+  PRODUCER_AUTHORITY_FILE,
   PRODUCER_MERGE_BYTE_CAP,
   PRODUCER_MERGE_ENTRY_CAP,
   ProducerMergeError,
   PRODUCER_SCRATCH_PREFIXES,
+  PRODUCER_SUPPORT_SCOPE,
   resolveMergeDestinations,
 } from "../src/core/workspace.ts";
+import { validAgentsMd } from "./helpers.ts";
 
 const SCOPE = ["src/", "spartan/", "agent-skill/skills/spbridge/SKILL.md"];
 const IN_PRODUCER_WORKSPACE = process.env[PRODUCER_ISOLATED_WORKSPACE_ENV] === "1";
@@ -117,6 +120,22 @@ test("isolated profile is ordered as a global deny followed by named allows and 
   await Promise.all([root, workspace, home, tmp].map((item) => fs.rm(item, { recursive: true, force: true })));
 });
 
+test("producer isolation refuses a workspace at or nested inside the repository root", async () => {
+  const root = await fixture();
+  const nested = path.join(root, "producer-workspace");
+  await fs.mkdir(nested);
+  try {
+    for (const workspace of [root, nested]) {
+      await assert.rejects(
+        () => applyProducerIsolation(root, workspace, {}),
+        (error: unknown) => error instanceof ProducerWriteScopeError && error.code === "confine_unavailable",
+      );
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("prepared producer copy contains admitted files, mirrored exact-file ancestors, and bounded support links", async () => {
   const root = await fixture();
   await fs.symlink("/tmp/not-followed", path.join(root, "src", "escape"));
@@ -139,6 +158,102 @@ test("prepared producer copy contains admitted files, mirrored exact-file ancest
     await cleanupProducerWorkspace(prepared.workspaceRoot);
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("prepared producer copy carries only the authority-file addition as a regular 0444 baseline entry", async () => {
+  const root = await fixture();
+  const authorityBytes = Buffer.from("# Repository authority\n\nclient-context declaration\n");
+  await fs.writeFile(path.join(root, PRODUCER_AUTHORITY_FILE), authorityBytes, { mode: 0o755 });
+  const prepared = await prepareProducerWorkspace({ repoRoot: root, writeScope: SCOPE, supportScope: [] });
+  try {
+    const authorityPath = path.join(prepared.workspaceRoot, PRODUCER_AUTHORITY_FILE);
+    assert.deepEqual(await fs.readFile(authorityPath), authorityBytes);
+    assert.equal((await fs.stat(authorityPath)).mode & 0o777, 0o444);
+    assert.equal(prepared.baseline.entries.get(PRODUCER_AUTHORITY_FILE)?.kind, "file");
+
+    const priorEntries = [
+      ".",
+      "agent-skill",
+      "agent-skill/skills",
+      "agent-skill/skills/spbridge",
+      "agent-skill/skills/spbridge/SKILL.md",
+      "spartan",
+      "spartan/task.md",
+      "src",
+      "src/a.ts",
+    ].sort();
+    const currentEntries = [...prepared.baseline.entries.keys()].sort();
+    assert.deepEqual(currentEntries.filter((entry) => entry !== PRODUCER_AUTHORITY_FILE), priorEntries);
+    assert.deepEqual(currentEntries.filter((entry) => !priorEntries.includes(entry)), [PRODUCER_AUTHORITY_FILE]);
+    assert.deepEqual([...PRODUCER_SUPPORT_SCOPE], ["node_modules/"]);
+    assert.deepEqual([...PRODUCER_SCRATCH_PREFIXES], ["dist/", "node_modules/.cache/"]);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+async function prepareAuthorityMergeCase(): Promise<{
+  root: string;
+  prepared: Awaited<ReturnType<typeof prepareProducerWorkspace>>;
+  writeScope: readonly string[];
+}> {
+  const root = await fixture();
+  await fs.writeFile(
+    path.join(root, PRODUCER_AUTHORITY_FILE),
+    validAgentsMd({ automaticImplementation: true, automaticWriteScope: SCOPE }),
+  );
+  const parsed = parseAgentsPolicy(await fs.readFile(path.join(root, PRODUCER_AUTHORITY_FILE), "utf8"));
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok || parsed.automatic_implementation_write_scope === null) {
+    throw new Error("fixture automatic implementation write scope unavailable");
+  }
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope: parsed.automatic_implementation_write_scope,
+    supportScope: [],
+  });
+  return { root, prepared, writeScope: parsed.automatic_implementation_write_scope };
+}
+
+async function assertAuthorityMergeRefused(
+  mutate: (authorityPath: string) => Promise<void>,
+): Promise<void> {
+  const { root, prepared, writeScope } = await prepareAuthorityMergeCase();
+  try {
+    const authorityPath = path.join(prepared.workspaceRoot, PRODUCER_AUTHORITY_FILE);
+    await mutate(authorityPath);
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    await assert.rejects(
+      () => captureProducerMerge({
+        workspaceRoot: prepared.workspaceRoot,
+        baseline: prepared.baseline,
+        after,
+        writeScope,
+        supportScope: [],
+      }),
+      (error: unknown) => error instanceof ProducerMergeError && error.reason === "write_scope_violation",
+    );
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+test("capture refuses a content edit of the carried authority file under the real automatic scope", async () => {
+  await assertAuthorityMergeRefused(async (authorityPath) => {
+    const replacement = `${authorityPath}.replacement`;
+    await fs.writeFile(replacement, "changed authority\n", { mode: 0o444 });
+    await fs.rename(replacement, authorityPath);
+  });
+});
+
+test("capture refuses a mode-only edit of the carried authority file under the real automatic scope", async () => {
+  await assertAuthorityMergeRefused(async (authorityPath) => fs.chmod(authorityPath, 0o644));
+});
+
+test("capture refuses deletion of the carried authority file under the real automatic scope", async () => {
+  await assertAuthorityMergeRefused(async (authorityPath) => fs.rm(authorityPath));
 });
 
 test("the real prepared producer copy runs every declared repository check with the bounded tool links", { skip: IN_PRODUCER_WORKSPACE }, async () => {

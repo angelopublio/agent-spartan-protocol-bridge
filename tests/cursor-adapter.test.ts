@@ -151,6 +151,7 @@ test("Cursor producer spawn uses canonical repo, mapped model, sandboxed argv, a
     CURSOR_API_KEY: "must-not-forward",
     CURSOR_CONFIG_DIR: "/must/not/forward",
     AGENT_CLI_CREDENTIAL_STORE: "file",
+    AGENT_PROFILES_REAL_HOME: "/real/home/selected-by-parent",
   };
   const adapter = new CursorAdapter({ runner, env });
   const approved = "run-9aa88da2-de7b-479f-b838-59c09a3743ca";
@@ -192,6 +193,7 @@ test("Cursor producer spawn uses canonical repo, mapped model, sandboxed argv, a
   assert.equal(spawn.env.CURSOR_API_KEY, undefined);
   assert.equal(spawn.env.CURSOR_CONFIG_DIR, undefined);
   assert.equal(spawn.env.AGENT_CLI_CREDENTIAL_STORE, "file");
+  assert.equal(spawn.env.AGENT_PROFILES_REAL_HOME, "/real/home/selected-by-parent");
   assert.equal(spawn.env[PRODUCER_ISOLATED_WORKSPACE_ENV], "1");
   assert.equal(spawn.args.includes("--mode"), false);
   assert.equal(spawn.args.includes("plan"), false);
@@ -228,7 +230,10 @@ test("Cursor producer spawn honors an injected producer_timeout_ms override", as
       };
     },
   };
-  const adapter = new CursorAdapter({ runner });
+  const adapter = new CursorAdapter({
+    runner,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: os.tmpdir() },
+  });
   const overrideMs = 3_600_000;
   await adapter.startProducer({
     execution_id: "exec-timeout",
@@ -244,6 +249,7 @@ test("Cursor producer spawn honors an injected producer_timeout_ms override", as
     producer_timeout_ms: overrideMs,
   });
   assert.equal(recorded[0]?.timeoutMs, overrideMs);
+  assert.equal(recorded[0]?.env.AGENT_PROFILES_REAL_HOME, undefined);
   await adapter.cleanupProducer();
   await fs.rm(root, { recursive: true, force: true });
 });
