@@ -8,7 +8,7 @@ task_type: planning
 risk: minor
 current_role: planner
 next_role: planner
-updated_at: 2026-09-05
+updated_at: 2026-09-12
 handoff_id: none
 next_handoff_id: HX-001
 ---
@@ -58,6 +58,32 @@ is that the advisory is not trustworthy: an operator who reads twenty-two
 entries, most of them nonsense, learns to skip the list, and the five real
 entries in it lose their audience. That is the defect — a signal diluted to the
 point of being ignored, not a blocked round.
+
+**Two further false-positive classes, observed 2026-09-12.** A private consumer
+repository running the Bridge produced advisories carrying tokens of two shapes
+this list does not contain, both made only of legal path characters and both
+carrying a slash, so `looksLikeRepoPath` admits them exactly as it admits
+`HOME/x`:
+
+- A scoped package specifier, `@scope/name`, quoted where a plan names a
+  dependency it installs rather than a file it writes. The leading `@` is the
+  discriminator the scan does not look at.
+- A git ref, `origin/main` and `origin/<branch>`, quoted where a plan names a
+  branch it merges or compares against.
+
+The same repository also produced the case this task already describes from the
+other side: a terminal transition whose three `unwritable_plan_targets` were
+`AGENTS.md`, `spartan-bridge/config.yaml`, and one genuine repository
+directory — the first two quoted in a sentence stating that the round does
+**not** edit them. That is `0053`'s `NEW.md` entry again, in a repository where
+the two authority paths are the ones a plan is most likely to mention in order
+to disclaim.
+
+These two shapes matter to D1 beyond adding rows to a fixture. A discrimination
+built on "the token looks like a path" cannot separate them, because they are
+well-formed paths; only their leading segment distinguishes them, and only
+against knowledge the scan does not have. A discrimination built on the
+surrounding sentence would catch all three classes at once.
 
 **The tension the planner round must weigh.** Every candidate discrimination is
 heuristic, and a plan is prose. Requiring a token to name an existing path
@@ -117,6 +143,13 @@ entries survive and the illustrative ones do not.
   `0053` auto-chain observed the same day. `plan-target-scan.ts` was read in
   this checkout before this file was written, and `0066`'s fix confirmed to
   cover only the no-slash branch.
+- 2026-09-12 (planner, Claude Code, claude-opus-5): added two further
+  false-positive classes to Context and their evidence, after a chain in a
+  private consumer repository stopped on `write_scope_violation` and its
+  advisory was read as the cause. Names no path, repository, organisation or
+  product of that repository, per `AGENTS.md` "Repository content names no
+  private identity". No decision pinned and no code changed; D1 through D3 are
+  still open.
 
 ## Evidence
 
@@ -133,6 +166,20 @@ entries survive and the illustrative ones do not.
   `:31-38` the `## Scope` / `## Decisions` section restriction.
 - Task `0054` — why the scan exists. Task `0066` — the bare-filename fix and
   the token naming. Task `0067` — advisory rather than hard stop.
+- `transition-1683c04d-250e-4f0d-a816-fe1a17e0d6d2`, 2026-09-12T11:05:09Z to
+  T11:09:12Z — `state: stopped`, `reason_code: write_scope_violation`,
+  `unwritable_plan_targets_count: 3`. Its plan review,
+  `run-d39e5309-0ff6-458c-9638-0b3d0a87f316`, was `verdict: pass`,
+  `reason_code: review_passed`, `task_write_state: written`, cycle 1 of 3, and
+  left the chain `awaiting_implementer`. Read from a redacted
+  `/spbridge-summary` document, per the rule that a run in another repository
+  is cited by id, reason code, verdict and timings only.
+- The `@scope/name` and `origin/<ref>` shapes were reported by the operator from
+  advisories in that same repository. No transition id was captured for those
+  two, so they are recorded here as shapes to cover, not as a citable document.
+- The scan's own guard, re-read on this checkout 2026-09-12: `REPO_PATH_CHARS`
+  admits `@`, so `@scope/name` reaches `looksLikeRepoPath`, which returns `true`
+  on the slash before any other test runs.
 
 ## Review
 
@@ -170,7 +217,7 @@ Open `spartan/tasks/0074-the-plan-target-scan-admits-illustrative-tokens.md` (ha
 
 Act as planner. Refine this plan against `src/core/plan-target-scan.ts` in full, `src/policy/agents-policy.ts` (`isPathAdmittedByScope`, `AUTHORITY_WRITE_PATHS`), the tests that currently pin `planTargetsUnwritablePath`, and tasks `0054`, `0066` and `0067` for what each already decided.
 
-Pin D1 by weighing the four candidates in the artifact, and for each say explicitly what it silences that should not be silenced — a heuristic over prose has no free option. Pin D2 as the case that must keep firing, which is the reason task `0054` built the scan. Pin D3. Use the twenty-two-token list quoted in Context as the regression fixture and state which five entries must survive.
+Pin D1 by weighing the four candidates in the artifact, and for each say explicitly what it silences that should not be silenced — a heuristic over prose has no free option. Pin D2 as the case that must keep firing, which is the reason task `0054` built the scan. Pin D3. Use the twenty-two-token list quoted in Context as the regression fixture, extended with the two 2026-09-12 shapes (`@scope/name`, `origin/<ref>`) and the three-target authority-disclaimer case, and state which entries must survive. Weigh D1 knowing that the two new shapes are well-formed paths distinguished only by their leading segment, so a discrimination over token shape alone cannot separate them.
 
 Verify every path, symbol and line reference exists in this checkout. Derive the acceptance criteria from the pinned decisions, last. Keep `## Review` as the `Verdict: PENDING` placeholder and `phase: planning`.
 
