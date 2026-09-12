@@ -8,6 +8,7 @@ import {
   resolveModelBindingMode,
   resolveProducerTimeoutMs,
 } from "../src/policy/bridge-config.ts";
+import { isValidScopePath } from "../src/policy/agents-policy.ts";
 import { BRIDGE_DEFAULT_PRODUCER_TIMEOUT_MS } from "../src/core/contracts.ts";
 import { makeRepo } from "./helpers.ts";
 
@@ -136,6 +137,101 @@ transitions:
     }),
     "strict",
   );
+});
+
+test("producer scratch_prefixes accepts exact documented bytes alone and beside model_binding", () => {
+  const scratchOnly = `schema_version: 1
+transitions:
+  review_plan_pass:
+    successor: implementer
+    dispatch: automatic
+producer:
+  scratch_prefixes:
+    - .next/
+    - build/output/
+`;
+  const withModelBinding = `schema_version: 1
+transitions:
+  review_plan_pass:
+    successor: implementer
+    dispatch: automatic
+producer:
+  model_binding: strict
+  scratch_prefixes:
+    - .next/
+`;
+  assert.deepEqual(parseBridgeConfigYaml(scratchOnly), {
+    kind: "valid",
+    schema_version: 1,
+    dispatch: "automatic",
+    successor: "implementer",
+    scratch_prefixes: [".next/", "build/output/"],
+  }, scratchOnly);
+  assert.deepEqual(parseBridgeConfigYaml(withModelBinding), {
+    kind: "valid",
+    schema_version: 1,
+    dispatch: "automatic",
+    successor: "implementer",
+    model_binding: "strict",
+    scratch_prefixes: [".next/"],
+  }, withModelBinding);
+});
+
+test("producer scratch_prefixes accepts a clean prefix strictly below the producer support root", () => {
+  const raw = `schema_version: 1
+transitions:
+  review_plan_pass:
+    successor: implementer
+    dispatch: automatic
+producer:
+  scratch_prefixes:
+    - node_modules/.vite/
+`;
+  assert.deepEqual(parseBridgeConfigYaml(raw), {
+    kind: "valid",
+    schema_version: 1,
+    dispatch: "automatic",
+    successor: "implementer",
+    scratch_prefixes: ["node_modules/.vite/"],
+  }, raw);
+});
+
+test("producer scratch_prefixes shape failures are config_invalid", () => {
+  const base = `schema_version: 1
+transitions:
+  review_plan_pass:
+    successor: implementer
+    dispatch: automatic
+producer:
+  scratch_prefixes:`;
+  const cases = [
+    `${base} []\n`,
+    `${base} build/\n`,
+    `${base}\n    - 7\n`,
+    `${base}\n    - build\n`,
+    `${base}\n    - /build/\n`,
+    `${base}\n    - ~/build/\n`,
+    `${base}\n    - !build/\n`,
+    `${base}\n    - build/./out/\n`,
+    `${base}\n    - build/../out/\n`,
+    `${base}\n    - build/*/\n`,
+    `${base}\n    - build/.git/out/\n`,
+    `${base}\n    - node_modules/\n`,
+    `${base}\n    - node_modules/.git/out/\n`,
+    `${base}\n    - other/node_modules/out/\n`,
+    `${base}\n    - .venv/cache/\n`,
+  ];
+  for (const raw of cases) {
+    assert.deepEqual(parseBridgeConfigYaml(raw), { kind: "invalid", reason: "config_invalid" }, raw);
+  }
+});
+
+test("bridge config uses the exported automatic-scope path grammar", async () => {
+  assert.equal(isValidScopePath("build/output/"), true);
+  assert.equal(isValidScopePath("build/../output/"), false);
+  const source = await fs.readFile(new URL("../src/policy/bridge-config.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ isValidScopePath \} from "\.\/agents-policy\.ts"/);
+  assert.doesNotMatch(source, /function isValidScopePath/);
 });
 
 test("empty producer, sibling keys, and non-enum model_binding are config_invalid", () => {

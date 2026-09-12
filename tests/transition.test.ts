@@ -279,6 +279,65 @@ test("malformed automatic config stops after plan pass with a separate transitio
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test("declared scratch contradictions stop before registry, launcher, or producer work", async () => {
+  for (const [declared, writeScope] of [
+    ["src/", ["src/"]],
+    ["src/generated/", ["src/"]],
+    ["s/", ["s/deep/"]],
+    ["cfg/", ["cfg/app.json"]],
+    ["AGENTS.md/", ["src/"]],
+    ["node_modules/", ["src/"]],
+  ] as const) {
+    const { root, taskRel } = await makeRepo({
+      agents: validAgentsMd({
+        automaticImplementation: true,
+        taskWrite: true,
+        producerChain: true,
+        automaticWriteScope: writeScope,
+        implementationScope: [...writeScope, "AGENTS.md", "spartan-bridge/config.yaml"],
+      }),
+      task: planTask(),
+    });
+    await writeBridgeConfig(root);
+    const clock = testClock(PLAN_ID);
+    const plan = await runReview(
+      { repo: root, task: taskRel },
+      testDeps({ clock, createAdapter: () => new FakeAdapter({ result: () => passResult("plan") }) }),
+    );
+    assert.equal(plan.status?.reason_code, "review_passed", declared);
+    const raw = `${AUTOMATIC_BRIDGE_CONFIG}producer:\n  scratch_prefixes:\n    - ${declared}\n`;
+    await writeBridgeConfig(root, raw);
+    let registryLoads = 0;
+    let launcherResolutions = 0;
+    let producers = 0;
+    const deps = testDeps({ clock });
+    deps.registry = {
+      load: async () => {
+        registryLoads += 1;
+        return VALID_REGISTRY;
+      },
+    };
+    deps.catalog = {
+      resolve: () => {
+        launcherResolutions += 1;
+        return new FakeAdapter({ result: () => passResult("plan") }, fakeCapabilities(), null, {
+          mutate: async () => {
+            producers += 1;
+          },
+        });
+      },
+    };
+    const outcome = await continueAfterPlanReview(plan.status!, { repo: root, task: taskRel }, deps);
+    assert.equal(outcome.kind, "transition", declared);
+    assert.equal(outcome.transition?.state, "stopped", declared);
+    assert.equal(outcome.transition?.reason_code, "config_invalid", declared);
+    assert.equal(registryLoads, 0, declared);
+    assert.equal(launcherResolutions, 0, declared);
+    assert.equal(producers, 0, declared);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("automatic config without the repository grant stops as unauthorized", async () => {
   const { root, taskRel } = await makeRepo({
     agents: validAgentsMd({ taskWrite: true }),
@@ -594,6 +653,106 @@ test("scratch-only producer output is discarded without stopping the chain", asy
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test("declared support-root scratch is discarded through the complete producer chain", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(
+    root,
+    `${AUTOMATIC_BRIDGE_CONFIG}producer:\n  scratch_prefixes:\n    - node_modules/.vite/\n`,
+  );
+  await fs.mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "support\n");
+  let reviews = 0;
+  const source = {
+    result: () => {
+      reviews += 1;
+      return reviews === 1 ? passResult("plan") : passResult("implementation");
+    },
+  };
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: chainClock(),
+      createAdapter: () => mutatingProducer(source, async (workspace) => {
+        await fs.mkdir(path.join(workspace, "node_modules", ".vite"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "node_modules", ".vite", "build.bin"), "cache\n");
+      }),
+    }),
+  );
+  assert.equal(outcome.kind, "review");
+  assert.equal(outcome.status?.reason_code, "review_passed");
+  assert.equal(outcome.transition?.state, "completed");
+  await assert.rejects(fs.access(path.join(root, "node_modules", ".vite", "build.bin")));
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("declared build scratch is discarded while the former dist default is refused", async () => {
+  for (const [writtenPrefix, expectedReason] of [
+    ["build", "review_passed"],
+    ["dist", "write_scope_violation"],
+  ] as const) {
+    const { root, taskRel } = await autoRepo();
+    await writeBridgeConfig(
+      root,
+      `${AUTOMATIC_BRIDGE_CONFIG}producer:\n  scratch_prefixes:\n    - build/\n`,
+    );
+    let reviews = 0;
+    const source = {
+      result: () => {
+        reviews += 1;
+        return reviews === 1 ? passResult("plan") : passResult("implementation");
+      },
+    };
+    const outcome = await runReviewThenSuccessor(
+      { repo: root, task: taskRel },
+      testDeps({
+        clock: chainClock(),
+        createAdapter: () => mutatingProducer(source, async (workspace) => {
+          await fs.mkdir(path.join(workspace, writtenPrefix), { recursive: true });
+          await fs.writeFile(path.join(workspace, writtenPrefix, "main.js"), "built\n");
+        }),
+      }),
+    );
+    assert.equal(outcome.status?.reason_code ?? outcome.transition?.reason_code, expectedReason, writtenPrefix);
+    await assert.rejects(fs.access(path.join(root, writtenPrefix, "main.js")));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an inherited dist default overlapping write scope is dropped and merged as product", async () => {
+  const writeScope = ["spartan/", "dist/"];
+  const { root, taskRel } = await makeRepo({
+    agents: validAgentsMd({
+      automaticImplementation: true,
+      taskWrite: true,
+      producerChain: true,
+      automaticWriteScope: writeScope,
+      implementationScope: [...writeScope, "AGENTS.md", "spartan-bridge/config.yaml"],
+    }),
+    task: planTask(),
+  });
+  await writeBridgeConfig(root);
+  let reviews = 0;
+  const source = {
+    result: () => {
+      reviews += 1;
+      return reviews === 1 ? passResult("plan") : passResult("implementation");
+    },
+  };
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: chainClock(),
+      createAdapter: () => mutatingProducer(source, async (workspace) => {
+        await fs.mkdir(path.join(workspace, "dist"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "dist", "main.js"), "product\n");
+      }),
+    }),
+  );
+  assert.equal(outcome.status?.reason_code, "review_passed", JSON.stringify(outcome));
+  assert.equal(await fs.readFile(path.join(root, "dist", "main.js"), "utf8"), "product\n");
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("an out-of-scope producer write is a write_scope_violation", async () => {
   const { root, taskRel } = await autoRepo();
   await writeBridgeConfig(root);
@@ -896,7 +1055,7 @@ test("snapshot and task-read failures after producer_started persist terminal_st
   for (const [label, reason, setup] of [
     [
       "pre-child snapshot cap",
-      "reviewer_isolation_unavailable",
+      "producer_snapshot_cap_exceeded",
       async (root: string) => ({
         snapshotCaps: { entries: 1 },
         extra: undefined as ((repo: string, taskRel: string) => Promise<void>) | undefined,
@@ -905,7 +1064,7 @@ test("snapshot and task-read failures after producer_started persist terminal_st
     ],
     [
       "pre-child snapshot hash cap",
-      "reviewer_isolation_unavailable",
+      "producer_snapshot_cap_exceeded",
       async (root: string) => ({
         snapshotCaps: { hashBytes: 1 },
         extra: undefined as ((workspace: string, taskRel: string, liveRoot: string) => Promise<void>) | undefined,
@@ -914,7 +1073,7 @@ test("snapshot and task-read failures after producer_started persist terminal_st
     ],
     [
       "producer repo_after snapshot cap",
-      "reviewer_isolation_unavailable",
+      "producer_snapshot_cap_exceeded",
       async (root: string) => {
         const before = await snapshotTree(root, { policy: "producer" });
         return {
@@ -1090,7 +1249,7 @@ test("each producer snapshot cap stop records its exact site", async () => {
 
     assert.equal(outcome.kind, "transition", site);
     assert.equal(outcome.transition?.state, "stopped", site);
-    assert.equal(outcome.transition?.reason_code, "reviewer_isolation_unavailable", site);
+    assert.equal(outcome.transition?.reason_code, "producer_snapshot_cap_exceeded", site);
     assert.deepEqual(outcome.transition?.producer_diagnostic, {
       stage: site === "workspace_baseline" ? "write_scope_lock" : "capture",
       exit_code: null,

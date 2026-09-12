@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isAlias, isMap, isPair, isSeq, parseDocument } from "yaml";
 import type { Document, Node, Pair, YAMLMap } from "yaml";
+import { producerPathDenied } from "../core/snapshot.ts";
+import { PRODUCER_SUPPORT_SCOPE } from "../core/workspace.ts";
+import { isValidScopePath } from "./agents-policy.ts";
 import { isSensitiveRegistryKey } from "./sensitive-fields.ts";
 
 export const BRIDGE_CONFIG_SCHEMA_VERSION = 1 as const;
@@ -22,6 +25,7 @@ export type BridgeConfig =
       successor: typeof TRANSITION_SUCCESSOR_IMPLEMENTER;
       implementer_timeout_ms?: number;
       model_binding?: ModelBindingMode;
+      scratch_prefixes?: readonly string[];
     }
   | { kind: "invalid"; reason: "config_invalid" };
 
@@ -131,20 +135,44 @@ export function parseBridgeConfigYaml(raw: string): BridgeConfig {
     implementer_timeout_ms = configured;
   }
   let model_binding: ModelBindingMode | undefined;
+  let scratch_prefixes: readonly string[] | undefined;
   if (hasProducer) {
     const producer = parsed.producer;
     if (!isPlainObject(producer)) {
       return { kind: "invalid", reason: "config_invalid" };
     }
     const producerKeys = Object.keys(producer);
-    if (producerKeys.length !== 1 || producerKeys[0] !== "model_binding") {
+    if (
+      producerKeys.length < 1 ||
+      producerKeys.length > 2 ||
+      producerKeys.some((key) => key !== "model_binding" && key !== "scratch_prefixes")
+    ) {
       return { kind: "invalid", reason: "config_invalid" };
     }
-    const configured = producer.model_binding;
-    if (configured !== "advisory" && configured !== "warn" && configured !== "strict") {
-      return { kind: "invalid", reason: "config_invalid" };
+    if (producerKeys.includes("model_binding")) {
+      const configured = producer.model_binding;
+      if (configured !== "advisory" && configured !== "warn" && configured !== "strict") {
+        return { kind: "invalid", reason: "config_invalid" };
+      }
+      model_binding = configured;
     }
-    model_binding = configured;
+    if (producerKeys.includes("scratch_prefixes")) {
+      const configured = producer.scratch_prefixes;
+      if (
+        !Array.isArray(configured) ||
+        configured.length === 0 ||
+        configured.some(
+          (value) =>
+            typeof value !== "string" ||
+            !value.endsWith("/") ||
+            !isValidScopePath(value) ||
+            !isDeclarableProducerScratchPrefix(value),
+        )
+      ) {
+        return { kind: "invalid", reason: "config_invalid" };
+      }
+      scratch_prefixes = configured as string[];
+    }
   }
   return {
     kind: "valid",
@@ -153,7 +181,23 @@ export function parseBridgeConfigYaml(raw: string): BridgeConfig {
     successor: TRANSITION_SUCCESSOR_IMPLEMENTER,
     ...(implementer_timeout_ms === undefined ? {} : { implementer_timeout_ms }),
     ...(model_binding === undefined ? {} : { model_binding }),
+    ...(scratch_prefixes === undefined ? {} : { scratch_prefixes }),
   };
+}
+
+function isDeclarableProducerScratchPrefix(value: string): boolean {
+  const prefix = value.slice(0, -1);
+  if (!producerPathDenied(prefix)) {
+    return true;
+  }
+  return PRODUCER_SUPPORT_SCOPE.some((supportPrefix) => {
+    const supportRoot = supportPrefix.slice(0, -1);
+    if (!prefix.startsWith(`${supportRoot}/`)) {
+      return false;
+    }
+    const descendant = prefix.slice(supportRoot.length + 1);
+    return descendant.length > 0 && !producerPathDenied(descendant);
+  });
 }
 
 function collectStructuralKeys(root: YAMLMap): string[] {

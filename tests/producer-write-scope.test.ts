@@ -12,7 +12,7 @@ import {
   producerIsolatedSandboxProfile,
 } from "../src/adapters/producer-write-scope.ts";
 import { createNodeProcessRunner, SANDBOX_EXEC_EXECUTABLE } from "../src/adapters/process.ts";
-import { producerPathDenied, snapshotTree, workspaceDiff } from "../src/core/snapshot.ts";
+import { producerPathDenied, SNAPSHOT_HASH_FILE_CAP, snapshotTree, workspaceDiff } from "../src/core/snapshot.ts";
 import { parseAgentsPolicy } from "../src/policy/agents-policy.ts";
 import {
   applyProducerMerge,
@@ -23,11 +23,14 @@ import {
   isStructuralProducerDirectoryDiff,
   prepareProducerWorkspace,
   PRODUCER_AUTHORITY_FILE,
+  PRODUCER_DEFAULT_BUILD_SCRATCH_PREFIXES,
+  PRODUCER_DEFAULT_SCRATCH_PREFIXES,
   PRODUCER_MERGE_BYTE_CAP,
   PRODUCER_MERGE_ENTRY_CAP,
   ProducerMergeError,
-  PRODUCER_SCRATCH_PREFIXES,
+  PRODUCER_SUPPORT_SCRATCH_PREFIXES,
   PRODUCER_SUPPORT_SCOPE,
+  resolveProducerScratchPrefixes,
   resolveMergeDestinations,
 } from "../src/core/workspace.ts";
 import { validAgentsMd } from "./helpers.ts";
@@ -70,11 +73,12 @@ async function fixture(): Promise<string> {
 async function snapshotPreparedProducerWorkspace(prepared: {
   workspaceRoot: string;
   supportScope: readonly string[];
+  scratchPrefixes: readonly string[];
 }) {
   return snapshotTree(prepared.workspaceRoot, {
     policy: "workspace",
     collapsePrefixes: prepared.supportScope,
-    omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+    omitPrefixes: prepared.scratchPrefixes,
   });
 }
 
@@ -186,7 +190,24 @@ test("prepared producer copy carries only the authority-file addition as a regul
     assert.deepEqual(currentEntries.filter((entry) => entry !== PRODUCER_AUTHORITY_FILE), priorEntries);
     assert.deepEqual(currentEntries.filter((entry) => !priorEntries.includes(entry)), [PRODUCER_AUTHORITY_FILE]);
     assert.deepEqual([...PRODUCER_SUPPORT_SCOPE], ["node_modules/"]);
-    assert.deepEqual([...PRODUCER_SCRATCH_PREFIXES], ["dist/", "node_modules/.cache/"]);
+    assert.deepEqual([...PRODUCER_DEFAULT_BUILD_SCRATCH_PREFIXES], ["dist/"]);
+    assert.deepEqual([...PRODUCER_SUPPORT_SCRATCH_PREFIXES], ["node_modules/.cache/"]);
+    assert.deepEqual([...PRODUCER_DEFAULT_SCRATCH_PREFIXES], ["dist/", "node_modules/.cache/"]);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a contained support scratch symlink stays unchanged and does not abort producer preparation", async () => {
+  const root = await fixture();
+  await fs.mkdir(path.join(root, "node_modules", "cache-target"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "cache-target", "existing.bin"), "cache\n");
+  await fs.symlink("cache-target", path.join(root, "node_modules", ".cache"));
+  const prepared = await prepareProducerWorkspace({ repoRoot: root, writeScope: SCOPE });
+  try {
+    assert.equal(await fs.readlink(path.join(prepared.workspaceRoot, "node_modules", ".cache")), "cache-target");
+    assert.equal(prepared.baseline.entries.has("node_modules/.cache"), false);
   } finally {
     await cleanupProducerWorkspace(prepared.workspaceRoot);
     await fs.rm(root, { recursive: true, force: true });
@@ -261,6 +282,18 @@ test("the real prepared producer copy runs every declared repository check with 
   if (!policy.ok || policy.automatic_implementation_write_scope === null) {
     throw new Error("repository automatic implementation write scope is unavailable");
   }
+  assert.deepEqual(policy.automatic_implementation_write_scope, [
+    "src/",
+    "tests/",
+    "docs/",
+    "skills/",
+    "agent-skill/skills/spbridge/SKILL.md",
+    "spartan/",
+    "README.md",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+  ]);
   const prepared = await prepareProducerWorkspace({
     repoRoot: REPOSITORY_ROOT,
     writeScope: policy.automatic_implementation_write_scope,
@@ -323,12 +356,173 @@ test("descriptor-backed copy never follows a source replaced by a symlink and ac
 });
 
 test("classification is ordered and exact", () => {
-  assert.deepEqual([...PRODUCER_SCRATCH_PREFIXES], ["dist/", "node_modules/.cache/"]);
+  assert.deepEqual([...PRODUCER_DEFAULT_SCRATCH_PREFIXES], ["dist/", "node_modules/.cache/"]);
   assert.equal(classifyProducerWorkspacePath("dist/x", ["src/"]), "scratch");
   assert.equal(classifyProducerWorkspacePath("node_modules/.cache/x", ["src/"]), "scratch");
   assert.equal(classifyProducerWorkspacePath("node_modules/typescript/x", ["src/"]), "support");
   assert.equal(classifyProducerWorkspacePath("src/x", ["src/"]), "admitted");
   assert.equal(classifyProducerWorkspacePath("build/x", ["src/"]), "refused");
+});
+
+test("scratch resolution refuses write-scope overlap and required producer-copy inputs", () => {
+  for (const [declared, scope] of [
+    ["src/", ["src/"]],
+    ["src/generated/", ["src/"]],
+    ["s/", ["s/deep/"]],
+    ["cfg/", ["cfg/app.json"]],
+  ] as const) {
+    assert.equal(resolveProducerScratchPrefixes([declared], scope), null, `${declared} against ${scope[0]}`);
+  }
+  for (const declared of ["AGENTS.md/", "node_modules/"] as const) {
+    assert.equal(resolveProducerScratchPrefixes([declared], SCOPE), null, declared);
+  }
+});
+
+test("declared support-root descendant follows the resolved scratch list through snapshots and merge", async () => {
+  const root = await fixture();
+  await fs.mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+  await fs.mkdir(path.join(root, "node_modules", ".vite"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "support\n");
+  await fs.writeFile(path.join(root, "node_modules", ".vite", "baseline.bin"), "before\n");
+  const scratchPrefixes = resolveProducerScratchPrefixes(["node_modules/.vite/"], SCOPE);
+  assert.deepEqual(scratchPrefixes, ["node_modules/.vite/", "node_modules/.cache/"]);
+  assert.equal(
+    classifyProducerWorkspacePath(
+      "node_modules/.vite/generated.bin",
+      SCOPE,
+      PRODUCER_SUPPORT_SCOPE,
+      scratchPrefixes!,
+    ),
+    "scratch",
+  );
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope: SCOPE,
+    scratchPrefixes: scratchPrefixes!,
+  });
+  try {
+    assert.deepEqual(prepared.scratchPrefixes, ["node_modules/.vite/", "node_modules/.cache/"]);
+    const supportBefore = prepared.baseline.entries.get("node_modules")?.hash;
+    await fs.writeFile(
+      path.join(prepared.workspaceRoot, "node_modules", ".vite", "baseline.bin"),
+      "after\n",
+    );
+    await fs.writeFile(
+      path.join(prepared.workspaceRoot, "node_modules", ".vite", "generated.bin"),
+      "generated\n",
+    );
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    assert.equal(after.entries.get("node_modules")?.hash, supportBefore);
+    assert.deepEqual(await captureProducerMerge({
+      workspaceRoot: prepared.workspaceRoot,
+      baseline: prepared.baseline,
+      after,
+      writeScope: SCOPE,
+      supportScope: prepared.supportScope,
+      scratchPrefixes: prepared.scratchPrefixes,
+    }), []);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("declared build scratch replaces the default while support scratch stays effective", async () => {
+  const root = await fixture();
+  await fs.mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "pkg", "index.js"), "support\n");
+  const scratchPrefixes = resolveProducerScratchPrefixes(["build/"], SCOPE);
+  assert.deepEqual(scratchPrefixes, ["build/", "node_modules/.cache/"]);
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope: SCOPE,
+    scratchPrefixes: scratchPrefixes!,
+  });
+  try {
+    assert.deepEqual(prepared.scratchPrefixes, ["build/", "node_modules/.cache/"]);
+    const supportBefore = prepared.baseline.entries.get("node_modules")?.hash;
+    const cache = path.join(prepared.workspaceRoot, "node_modules", ".cache");
+    await fs.writeFile(path.join(cache, "tool.cache"), "cache\n");
+    await fs.mkdir(path.join(prepared.workspaceRoot, "build"));
+    await fs.writeFile(path.join(prepared.workspaceRoot, "build", "built.js"), "built\n");
+    let after = await snapshotPreparedProducerWorkspace(prepared);
+    assert.equal(after.entries.get("node_modules")?.hash, supportBefore);
+    assert.equal(after.entries.has("build"), false);
+    assert.equal(after.entries.has("node_modules/.cache"), false);
+    assert.deepEqual(await captureProducerMerge({
+      workspaceRoot: prepared.workspaceRoot,
+      baseline: prepared.baseline,
+      after,
+      writeScope: SCOPE,
+      supportScope: prepared.supportScope,
+      scratchPrefixes: prepared.scratchPrefixes,
+    }), []);
+
+    await fs.mkdir(path.join(prepared.workspaceRoot, "dist"));
+    await fs.writeFile(path.join(prepared.workspaceRoot, "dist", "built.js"), "unexpected\n");
+    after = await snapshotPreparedProducerWorkspace(prepared);
+    await assert.rejects(
+      () => captureProducerMerge({
+        workspaceRoot: prepared.workspaceRoot,
+        baseline: prepared.baseline,
+        after,
+        writeScope: SCOPE,
+        supportScope: prepared.supportScope,
+        scratchPrefixes: prepared.scratchPrefixes,
+      }),
+      (error: unknown) => error instanceof ProducerMergeError && error.reason === "write_scope_violation",
+    );
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an inherited default overlapping write scope is product and merges back", async () => {
+  const root = await fixture();
+  const writeScope = [...SCOPE, "dist/"];
+  const scratchPrefixes = resolveProducerScratchPrefixes(undefined, writeScope);
+  assert.deepEqual(scratchPrefixes, ["node_modules/.cache/"]);
+  const prepared = await prepareProducerWorkspace({
+    repoRoot: root,
+    writeScope,
+    supportScope: [],
+    scratchPrefixes: scratchPrefixes!,
+  });
+  try {
+    await fs.mkdir(path.join(prepared.workspaceRoot, "dist"));
+    await fs.writeFile(path.join(prepared.workspaceRoot, "dist", "built.js"), "product\n");
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    const captured = await captureProducerMerge({
+      workspaceRoot: prepared.workspaceRoot,
+      baseline: prepared.baseline,
+      after,
+      writeScope,
+      supportScope: prepared.supportScope,
+      scratchPrefixes: prepared.scratchPrefixes,
+    });
+    assert.deepEqual(captured.map((entry) => entry.path), ["dist", "dist/built.js"]);
+    const destinations = await resolveMergeDestinations({ repoRoot: root, captured });
+    await applyProducerMerge({ repoRoot: root, captured, destinations, runId: "inherited-default" });
+    assert.equal(await fs.readFile(path.join(root, "dist", "built.js"), "utf8"), "product\n");
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace-policy baseline fully hashes large admitted files in the producer copy", async () => {
+  const root = await fixture();
+  await fs.writeFile(path.join(root, "src", "large.bin"), Buffer.alloc(SNAPSHOT_HASH_FILE_CAP + 1, 7));
+  const prepared = await prepareProducerWorkspace({ repoRoot: root, writeScope: SCOPE, supportScope: [] });
+  try {
+    const entry = prepared.baseline.entries.get("src/large.bin");
+    assert.equal(entry?.hash?.startsWith("sha256:"), true);
+    assert.equal(entry?.mtimeNs, undefined);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("workspace diff catches tail-only content and structural directory entries are filtered", async () => {

@@ -111,6 +111,7 @@ export type ReasonCode =
   | "adapter_error"
   | "result_schema_invalid"
   | "reviewer_isolation_unavailable"
+  | "producer_snapshot_cap_exceeded"
   | "adapter_timeout"
   | "reviewer_write_detected"
   | "task_artifact_write_rejected"

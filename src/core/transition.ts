@@ -55,7 +55,7 @@ import {
   cleanupProducerWorkspace,
   prepareProducerWorkspace,
   ProducerMergeError,
-  PRODUCER_SCRATCH_PREFIXES,
+  resolveProducerScratchPrefixes,
   resolveMergeDestinations,
 } from "./workspace.ts";
 
@@ -370,6 +370,11 @@ export async function continueAfterPlanReview(
     return createStoppedTransition(repoRoot, plan, input.task, deps, "automatic_implementation_not_authorized");
   }
 
+  const scratchPrefixes = resolveProducerScratchPrefixes(config.scratch_prefixes, admission.write_scope);
+  if (scratchPrefixes === null) {
+    return createStoppedTransition(repoRoot, plan, input.task, deps, "config_invalid");
+  }
+
   let registry;
   try {
     registry = await loadRegistry(deps.registry);
@@ -508,6 +513,7 @@ export async function continueAfterPlanReview(
         transition,
         deps,
         producerTimeoutMs,
+        scratchPrefixes,
       };
       if (progress !== undefined) {
         producerInput.progress = progress;
@@ -588,6 +594,7 @@ async function runProducerRound(input: {
   transition: MutableTransition;
   deps: AppDeps;
   producerTimeoutMs: number;
+  scratchPrefixes: readonly string[];
   progress?: SuccessorProgress;
   signal?: AbortSignal;
 }): Promise<SuccessorOutcome | null> {
@@ -673,13 +680,14 @@ async function runGuardedRound(
       prepared = await prepareProducerWorkspace({
         repoRoot: input.repoRoot,
         writeScope: input.writeScope,
+        scratchPrefixes: input.scratchPrefixes,
         ...(baselineCaps === undefined ? {} : { snapshotCaps: baselineCaps }),
       });
       workspaceRoot = prepared.workspaceRoot;
     } catch (error) {
       return {
         kind: "stop",
-        reason: error instanceof SnapshotCapError ? "reviewer_isolation_unavailable" : "producer_failure",
+        reason: error instanceof SnapshotCapError ? "producer_snapshot_cap_exceeded" : "producer_failure",
         diagnostic: buildProducerDiagnostic({
           stage: "write_scope_lock",
           writeScopeCode: error instanceof ProducerWriteScopeError ? error.code : null,
@@ -759,7 +767,7 @@ async function runGuardedRound(
         ...producerSnapshotCaps(input.deps, "workspace_after"),
         policy: "workspace",
         collapsePrefixes: prepared.supportScope,
-        omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+        omitPrefixes: prepared.scratchPrefixes,
       });
     } catch (error) {
       return producerSnapshotStop("workspace_after", error);
@@ -833,6 +841,7 @@ async function runGuardedRound(
         after: copyAfter,
         writeScope: input.writeScope,
         supportScope: prepared.supportScope,
+        scratchPrefixes: prepared.scratchPrefixes,
       });
       destinations = await resolveMergeDestinations({ repoRoot: input.repoRoot, captured });
     } catch (error) {
@@ -891,7 +900,7 @@ async function runGuardedRound(
 }
 
 function mapProducerCaptureError(error: unknown): ReasonCode {
-  return error instanceof SnapshotCapError ? "reviewer_isolation_unavailable" : "adapter_error";
+  return error instanceof SnapshotCapError ? "producer_snapshot_cap_exceeded" : "adapter_error";
 }
 
 function producerSnapshotStop(site: ProducerSnapshotSite, error: unknown): GuardedRoundOutcome {

@@ -37,7 +37,12 @@ export const REVIEWER_ODB_DIR = "reviewer-odb";
 export const WORKTREE_PREFIX = "worktree";
 export const PRODUCER_AUTHORITY_FILE = "AGENTS.md" as const;
 export const PRODUCER_SUPPORT_SCOPE = ["node_modules/"] as const;
-export const PRODUCER_SCRATCH_PREFIXES = ["dist/", "node_modules/.cache/"] as const;
+export const PRODUCER_DEFAULT_BUILD_SCRATCH_PREFIXES = ["dist/"] as const;
+export const PRODUCER_SUPPORT_SCRATCH_PREFIXES = ["node_modules/.cache/"] as const;
+export const PRODUCER_DEFAULT_SCRATCH_PREFIXES = [
+  ...PRODUCER_DEFAULT_BUILD_SCRATCH_PREFIXES,
+  ...PRODUCER_SUPPORT_SCRATCH_PREFIXES,
+] as const;
 export const PRODUCER_MERGE_ENTRY_CAP = 2_000;
 export const PRODUCER_MERGE_BYTE_CAP = 64 * 1024 * 1024;
 
@@ -1073,6 +1078,7 @@ export type PreparedProducerWorkspace = {
   workspaceRoot: string;
   baseline: TreeSnapshot;
   supportScope: readonly string[];
+  scratchPrefixes: readonly string[];
 };
 
 export type ProducerWorkspaceClass = "scratch" | "support" | "admitted" | "refused";
@@ -1120,11 +1126,54 @@ export type ProducerMergeReadDeps = {
   beforeFileRead?: (abs: string, size: number) => void;
 };
 
+export function resolveProducerScratchPrefixes(
+  declaredBuildPrefixes: readonly string[] | undefined,
+  writeScope: readonly string[],
+): readonly string[] | null {
+  if (
+    declaredBuildPrefixes !== undefined &&
+    declaredBuildPrefixes.some(
+      (prefix) =>
+        producerScratchPrefixOverlapsWriteScope(prefix, writeScope) ||
+        producerScratchPrefixCoversRequiredInput(prefix),
+    )
+  ) {
+    return null;
+  }
+  const buildPrefixes = declaredBuildPrefixes ?? PRODUCER_DEFAULT_BUILD_SCRATCH_PREFIXES.filter(
+    (prefix) => !producerScratchPrefixOverlapsWriteScope(prefix, writeScope),
+  );
+  return [...new Set([...buildPrefixes, ...PRODUCER_SUPPORT_SCRATCH_PREFIXES])];
+}
+
+function producerScratchPrefixCoversRequiredInput(scratchPrefix: string): boolean {
+  return (
+    isPrefixMember(PRODUCER_AUTHORITY_FILE, scratchPrefix) ||
+    PRODUCER_SUPPORT_SCOPE.some((prefix) => isPrefixMember(prefix.slice(0, -1), scratchPrefix))
+  );
+}
+
+function producerScratchPrefixOverlapsWriteScope(
+  scratchPrefix: string,
+  writeScope: readonly string[],
+): boolean {
+  return writeScope.some((entry) => {
+    if (!entry.endsWith("/")) {
+      return isPathAdmittedByScope(entry, [scratchPrefix]);
+    }
+    return (
+      isPrefixMember(scratchPrefix.slice(0, -1), entry) ||
+      isPrefixMember(entry.slice(0, -1), scratchPrefix)
+    );
+  });
+}
+
 export async function prepareProducerWorkspace(
   input: {
     repoRoot: string;
     writeScope: readonly string[];
     supportScope?: readonly string[];
+    scratchPrefixes?: readonly string[];
     snapshotCaps?: Pick<SnapshotTreeCaps, "entries" | "hashBytes">;
   },
   deps: ProducerWorkspaceDeps = {},
@@ -1132,6 +1181,7 @@ export async function prepareProducerWorkspace(
   const repoRoot = await fs.realpath(path.resolve(input.repoRoot));
   const writeRules = parseScope(input.writeScope);
   const supportScope = [...(input.supportScope ?? PRODUCER_SUPPORT_SCOPE)];
+  const scratchPrefixes = [...(input.scratchPrefixes ?? PRODUCER_DEFAULT_SCRATCH_PREFIXES)];
   const supportRules = parseScope(supportScope);
   let workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-producer-"));
   let complete = false;
@@ -1143,7 +1193,7 @@ export async function prepareProducerWorkspace(
         await copyExactProducerFile(repoRoot, workspaceRoot, rule.path, deps.safeReadSeam);
       } else {
         const rel = rule.prefix.slice(0, -1);
-        await copyProducerTree(repoRoot, workspaceRoot, rel, true, false, deps.safeReadSeam);
+        await copyProducerTree(repoRoot, workspaceRoot, rel, true, false, scratchPrefixes, deps.safeReadSeam);
       }
     }
     for (const rule of supportRules) {
@@ -1151,7 +1201,7 @@ export async function prepareProducerWorkspace(
         await copyExactProducerFile(repoRoot, workspaceRoot, rule.path, deps.safeReadSeam, true);
       } else {
         const rel = rule.prefix.slice(0, -1);
-        await copyProducerTree(repoRoot, workspaceRoot, rel, false, true, deps.safeReadSeam);
+        await copyProducerTree(repoRoot, workspaceRoot, rel, false, true, scratchPrefixes, deps.safeReadSeam);
       }
     }
     await copyExactProducerFile(
@@ -1162,15 +1212,15 @@ export async function prepareProducerWorkspace(
       true,
       0o444,
     );
-    await ensureWritableSupportScratch(workspaceRoot, supportRules);
+    await ensureWritableSupportScratch(workspaceRoot, supportRules, scratchPrefixes);
     const baseline = await snapshotTree(workspaceRoot, {
       ...input.snapshotCaps,
       policy: "workspace",
       collapsePrefixes: supportScope,
-      omitPrefixes: PRODUCER_SCRATCH_PREFIXES,
+      omitPrefixes: scratchPrefixes,
     });
     complete = true;
-    return { workspaceRoot, baseline, supportScope };
+    return { workspaceRoot, baseline, supportScope, scratchPrefixes };
   } catch (error) {
     if (error instanceof SnapshotCapError) {
       throw error;
@@ -1183,21 +1233,71 @@ export async function prepareProducerWorkspace(
   }
 }
 
-async function ensureWritableSupportScratch(workspaceRoot: string, supportRules: readonly ScopeRule[]): Promise<void> {
-  if (!supportRules.some((rule) => rule.kind === "dir" && rule.prefix === "node_modules/")) {
-    return;
+async function ensureWritableSupportScratch(
+  workspaceRoot: string,
+  supportRules: readonly ScopeRule[],
+  scratchPrefixes: readonly string[],
+): Promise<void> {
+  for (const supportRule of supportRules) {
+    if (supportRule.kind !== "dir") continue;
+    const supportRoot = supportRule.prefix.slice(0, -1);
+    const descendants = scratchPrefixes
+      .map((prefix) => prefix.slice(0, -1))
+      .filter((prefix) => prefix.startsWith(`${supportRoot}/`));
+    if (descendants.length === 0) continue;
+    const supportAbs = path.join(workspaceRoot, ...supportRoot.split("/"));
+    let supportStat: Stats;
+    try {
+      supportStat = await fs.lstat(supportAbs);
+    } catch {
+      // An absent support root stays absent; support is not an authority grant.
+      continue;
+    }
+    if (!supportStat.isDirectory() || supportStat.isSymbolicLink()) continue;
+    for (const descendant of descendants) {
+      await ensureWritableSupportScratchPath(workspaceRoot, supportRoot, descendant);
+    }
   }
-  const supportRoot = path.join(workspaceRoot, "node_modules");
+}
+
+async function ensureWritableSupportScratchPath(
+  workspaceRoot: string,
+  supportRoot: string,
+  scratchPath: string,
+): Promise<void> {
+  const relative = scratchPath.slice(supportRoot.length + 1);
+  const components = validateRepositoryPath(relative).split("/");
+  let current = path.join(workspaceRoot, ...supportRoot.split("/"));
+  const restored: { abs: string; mode: number }[] = [];
   try {
-    const stat = await fs.lstat(supportRoot);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
-    await fs.chmod(supportRoot, 0o755);
-    const cache = path.join(supportRoot, ".cache");
-    await fs.mkdir(cache, { recursive: true, mode: 0o700 });
-    await fs.chmod(cache, 0o700);
-    await fs.chmod(supportRoot, 0o555);
-  } catch {
-    // An absent support root stays absent; support is not an authority grant.
+    for (const [index, component] of components.entries()) {
+      const parentStat = await fs.lstat(current);
+      if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+        // Preserve a copied support symlink or non-directory as read-only support.
+        return;
+      }
+      const parentMode = parentStat.mode & 0o7777;
+      await fs.chmod(current, parentMode | 0o700);
+      restored.push({ abs: current, mode: parentMode });
+      current = path.join(current, component);
+      try {
+        const stat = await fs.lstat(current);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+          // Scratch is disposable, but it is not permission to replace support input.
+          return;
+        }
+      } catch (error) {
+        if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+          throw error;
+        }
+        await fs.mkdir(current, { mode: index === components.length - 1 ? 0o700 : 0o755 });
+      }
+    }
+    await fs.chmod(current, 0o700);
+  } finally {
+    for (const ancestor of restored.reverse()) {
+      await fs.chmod(ancestor.abs, ancestor.mode);
+    }
   }
 }
 
@@ -1260,6 +1360,7 @@ async function copyProducerTree(
   rel: string,
   writable: boolean,
   support: boolean,
+  scratchPrefixes: readonly string[],
   seam?: SafeReadSeam,
 ): Promise<void> {
   validateRepositoryPath(rel);
@@ -1275,7 +1376,7 @@ async function copyProducerTree(
     return;
   }
   await fs.mkdir(destination, { recursive: true, mode: writable ? ((rootStat.mode & 0o777) | 0o700) : 0o755 });
-  await copyDirectoryMembers(sourceRoot, destinationRoot, rel, writable, support, seam);
+  await copyDirectoryMembers(sourceRoot, destinationRoot, rel, writable, support, scratchPrefixes, seam);
 }
 
 async function copyDirectoryMembers(
@@ -1284,6 +1385,7 @@ async function copyDirectoryMembers(
   relDir: string,
   writable: boolean,
   support: boolean,
+  scratchPrefixes: readonly string[],
   seam?: SafeReadSeam,
 ): Promise<void> {
   const sourceDir = joinUnder(sourceRoot, relDir);
@@ -1308,17 +1410,18 @@ async function copyDirectoryMembers(
     }
     if (stat.isDirectory()) {
       await fs.mkdir(destination, { mode: 0o755 });
-      await copyDirectoryMembers(sourceRoot, destinationRoot, rel, writable, support, seam);
-      const scratch = isPrefixMember(rel, "node_modules/.cache/");
+      await copyDirectoryMembers(sourceRoot, destinationRoot, rel, writable, support, scratchPrefixes, seam);
+      const scratch = scratchPrefixes.some((prefix) => isPrefixMember(rel, prefix));
       await fs.chmod(destination, writable || scratch ? ((stat.mode & 0o777) | 0o700) : 0o555);
       continue;
     }
     if (stat.isFile()) {
-      await copyProducerRegularFile(source, destination, !writable && !isPrefixMember(rel, "node_modules/.cache/"), seam);
+      const scratch = scratchPrefixes.some((prefix) => isPrefixMember(rel, prefix));
+      await copyProducerRegularFile(source, destination, !writable && !scratch, seam);
     }
   }
   const dirStat = await fs.stat(sourceDir);
-  const scratch = isPrefixMember(relDir, "node_modules/.cache/");
+  const scratch = scratchPrefixes.some((prefix) => isPrefixMember(relDir, prefix));
   await fs.chmod(destinationDir, writable || scratch ? ((dirStat.mode & 0o777) | 0o700) : 0o555);
 }
 
@@ -1392,8 +1495,9 @@ export function classifyProducerWorkspacePath(
   posix: string,
   writeScope: readonly string[],
   supportScope: readonly string[] = PRODUCER_SUPPORT_SCOPE,
+  scratchPrefixes: readonly string[] = PRODUCER_DEFAULT_SCRATCH_PREFIXES,
 ): ProducerWorkspaceClass {
-  if (PRODUCER_SCRATCH_PREFIXES.some((prefix) => isPrefixMember(posix, prefix))) {
+  if (scratchPrefixes.some((prefix) => isPrefixMember(posix, prefix))) {
     return "scratch";
   }
   if (supportScope.some((prefix) => isPrefixMember(posix, prefix))) {
@@ -1424,6 +1528,7 @@ export async function captureProducerMerge(input: {
   after: TreeSnapshot;
   writeScope: readonly string[];
   supportScope?: readonly string[];
+  scratchPrefixes?: readonly string[];
 }, deps: ProducerMergeReadDeps = {}): Promise<CapturedProducerChange[]> {
   const workspaceRoot = await fs.realpath(input.workspaceRoot);
   const captured: CapturedProducerChange[] = [];
@@ -1432,7 +1537,12 @@ export async function captureProducerMerge(input: {
     (entry) => entry.path !== "." && !isStructuralProducerDirectoryDiff(entry, input.baseline, input.after),
   );
   for (const entry of diff) {
-    const classification = classifyProducerWorkspacePath(entry.path, input.writeScope, input.supportScope);
+    const classification = classifyProducerWorkspacePath(
+      entry.path,
+      input.writeScope,
+      input.supportScope,
+      input.scratchPrefixes,
+    );
     if (classification === "scratch") {
       continue;
     }

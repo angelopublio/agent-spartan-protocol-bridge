@@ -711,7 +711,7 @@ function decodeScopeEntry(item: string): string | null {
   return inner;
 }
 
-function isValidScopePath(value: string): boolean {
+export function isValidScopePath(value: string): boolean {
   if (value.startsWith("/") || value.startsWith("~") || value.startsWith("!")) {
     return false;
   }

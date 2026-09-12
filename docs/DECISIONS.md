@@ -1223,6 +1223,11 @@ harness model. Capturing the optional `planner` row uses the same
 context on that row fails the entire `parseAgentsPolicy`, not only the planner
 query.
 
+**Amendment (2026-09-12, task 0080):** D-076 widens the optional `producer`
+section to contain one or both of `model_binding` and `scratch_prefixes`; an
+empty section or any other key remains invalid. D-068's model-binding behavior
+is unchanged.
+
 ## D-069 — A finished chain names the rebuild; D-031 gains no exemption (task 0070)
 
 **Decision:** `main()`'s `wait` branch, after printing a terminal document,
@@ -1473,3 +1478,40 @@ ambiguous and is reported before a round. D-055 remains the Codex-specific revie
 shortcut (`CODEX_HOME` forwarding plus review cwd); D-075 supplies the general,
 host-neutral declaration that lets a cwd resolver land correctly in a temporary
 producer workspace even when no selector is present.
+
+## D-076 — Producer scratch follows repository build output (task 0080)
+
+**Decision:** On 2026-09-11, `producer.scratch_prefixes` in
+`spartan-bridge/config.yaml` became an optional non-empty list of relative,
+trailing-slash build-output prefixes. A declaration replaces the `dist/` build
+default, while `node_modules/.cache/` remains an always-applied support scratch
+prefix. A declared prefix overlapping the automatic implementation write scope,
+covering the copied `AGENTS.md`, or covering a producer support root refuses
+before registry or adapter work as `config_invalid`; an overlapping inherited
+default is dropped so the write scope wins. A clean declaration strictly below a
+producer support root, such as `node_modules/.vite/`, is valid: the parser admits
+the support-root segment only in that position and continues to reject an equal
+root, unrelated skipped roots, and skipped descendants.
+
+One resolved list is passed into producer preparation and returned with the
+prepared workspace for the post-run snapshot and merge classifier. Producer-copy
+snapshots retain full-file hashing. A cap at any producer-transition snapshot
+site — live-tree `repo_before` and `repo_after`, runtime-ownership
+`runtime_before` and `runtime_after`, or isolated-copy `workspace_baseline` and `workspace_after` — reports
+`producer_snapshot_cap_exceeded`; reviewer isolation keeps its existing reason.
+When a resolved support-scratch descendant already exists as a contained support
+symlink or another non-directory, preparation leaves it unchanged rather than
+trying to make it writable or aborting the round; this preserves the pre-D-076
+behavior for repositories that inherit `node_modules/.cache/`.
+
+**Relationship to D-074:** D-074 established that producer preparation resolves
+support once and that both copy snapshots must share collapse and omission rules.
+D-076 applies that same no-drift rule to scratch: configuration is resolved once,
+then the baseline, post-run snapshot, support digest, and merge classification all
+consume the prepared value. This changes which build paths may be discarded, not
+the snapshot hashing guarantees or the producer's write authority.
+
+**Consequence:** Repositories whose build output is outside `dist/` can exclude
+that output from both full-hash copy snapshots without widening merge authority.
+A contradictory declaration fails loudly, while a repository that admits its own
+`dist/` no longer loses those product edits to an inherited default.
