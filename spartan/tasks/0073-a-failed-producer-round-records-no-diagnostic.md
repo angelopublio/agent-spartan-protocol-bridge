@@ -8,7 +8,7 @@ task_type: planning
 risk: material
 current_role: planner
 next_role: planner
-updated_at: 2026-09-11
+updated_at: 2026-09-12
 handoff_id: HX-004
 next_handoff_id: none
 ---
@@ -566,6 +566,11 @@ Repository checks:
   everything because nothing is persisted. Acceptance criteria re-derived from
   the amended decisions, not patched row by row. D4 is unchanged and was not
   challenged in either cycle. No source change.
+- 2026-09-12 (human-operator, Claude Code, claude-opus-5): recorded a second
+  real occurrence in Evidence, observed the same day on the task `0074`
+  auto-chain, and corrected the stale "last recorded decision" claim. No
+  decision pinned, no criterion changed, no source change; the recorded
+  `CHANGES_REQUESTED` findings are still open.
 
 ## Evidence
 
@@ -636,6 +641,33 @@ Repository checks:
   `tests/cursor-adapter.test.ts:68`. The queued Scope placed the
   `waitProducer` declaration in `src/core/contracts.ts`; it is in
   `src/adapters/adapter.ts:44`.
+- **Second occurrence, 2026-09-12, in this repository.**
+  `.spartan-bridge/transitions/transition-d9981807-f295-4dd3-8a07-621f13c9e08f/`
+  — the auto-chain successor of `run-c7ae0e74-c1a1-4f8d-a0d0-3c0a323d20bd`,
+  the passed plan review of task `0074`. `events.jsonl` holds four lines,
+  `authorization` / `lock_acquired` / `producer_started` / `terminal_stop`,
+  and the terminal document repeats the first occurrence exactly:
+  `state: stopped`, `reason_code: producer_failure`,
+  `producer_diagnostic.stage: exit_nonzero`, `exit_code: 1`,
+  `timed_out: false`, every other diagnostic field `null`. The mapped
+  implementer was the `codex` binding, launcher `codex-plan-reviewer-v1`.
+- What the second occurrence adds to the first. The round ran eleven minutes
+  and seven seconds (`2026-09-12T13:05:52.291Z` to `T13:16:59.498Z`) before
+  exiting 1. That duration is the only thing separating this stop from an
+  instant provider rejection, and it is not in the record: `waited_ms` is
+  `null` on an `exit_nonzero` stop, so an operator must subtract two
+  timestamps by hand to learn that the producer worked for eleven minutes
+  rather than failing on its first call. A provider limit, a failed
+  repository check, and a provider error stay indistinguishable. The
+  isolated scope copy was discarded on the stop, so the worktree was clean
+  and the writer lock released — there was nothing to `resume` and nothing
+  to read.
+- Correction, 2026-09-12: the Evidence bullet above stating "D-072 is the
+  last recorded decision, so this task's entry is D-073" is stale.
+  `docs/DECISIONS.md` now records D-074 (task `0077`), D-075 (task `0079`)
+  and D-076 (task `0080`); D-073 is unused. The planner round that revises
+  against the recorded findings re-derives the number rather than keeping
+  `D-073` on the superseded basis.
 
 ## Review
 
