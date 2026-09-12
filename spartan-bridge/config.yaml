@@ -3,3 +3,5 @@ transitions:
   review_plan_pass:
     successor: implementer
     dispatch: automatic
+producer:
+  model_binding: strict
