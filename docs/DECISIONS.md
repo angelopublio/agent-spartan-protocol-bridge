@@ -917,6 +917,16 @@ post-child snapshot — is the write boundary for `AGENTS.md`,
 `AGENTS.md` authoring rule stays planner discipline. `plan_targets_unwritable_path`
 remains on `ReasonCode` for historical records. `SCHEMA_VERSION` stays 2.
 
+**Amendment (2026-09-12, task 0074):** a slash-bearing token is a scan target
+only when its leading segment is present in the repository-root listing. The
+caller supplies that listing, keeping the scanner pure; an unreadable listing
+uses a report-everything sentinel so the advisory is not silently weakened.
+`AGENTS.md` and `spartan-bridge/config.yaml` bypass the root gate and are always
+classified. This deliberately accepts one false negative: a plan that proposes
+a path under a new, not-yet-present top-level directory is omitted from the
+advisory. The producer write-scope guard remains the write boundary, and
+`SCHEMA_VERSION` stays 2.
+
 ## D-054: Detach the review chain from the caller's shell; recover with `resume` (2026-08-31)
 
 **Decision:** Task `0055`, from an external B + D review that rejected A / C / E.

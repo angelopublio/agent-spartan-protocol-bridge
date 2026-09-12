@@ -459,6 +459,107 @@ test("a plan naming AGENTS.md in Decisions still spawns the implementer and reco
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test("the repository root listing suppresses slash-bearing tokens whose leading segment is absent", async () => {
+  const task = planTaskTargeting({ decisions: "- Edit `config/secret.env`.\n" });
+  const { root, taskRel } = await makeRepo({ agents: autoAgents(), task });
+  await writeBridgeConfig(root);
+  const clock = testClock(PLAN_ID);
+  let reviews = 0;
+  const deps = testDeps({
+    clock,
+    createAdapter: () =>
+      new FakeAdapter(
+        {
+          result: () => {
+            reviews += 1;
+            return reviews === 1 ? passResult("plan") : passResult("implementation");
+          },
+        },
+        fakeCapabilities(),
+        null,
+        {
+          mutate: async (input) => {
+            await declareImplementationReady(input.workspace_root, input.task_path);
+          },
+        },
+      ),
+  });
+  const plan = await runReview({ repo: root, task: taskRel }, deps);
+  assert.equal(plan.status?.reason_code, "review_passed");
+
+  const outcome = await continueAfterPlanReview(plan.status!, { repo: root, task: taskRel }, deps);
+  assert.equal(outcome.transition?.unwritable_plan_targets, null);
+  const events = (
+    await fs.readFile(
+      path.join(root, ".spartan-bridge", "transitions", outcome.transition!.transition_id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; unwritable_plan_targets?: string[] | null });
+  assert.equal(events.find((event) => event.type === "authorization")?.unwritable_plan_targets, null);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("an unreadable root listing preserves slash-bearing advisories and reaches authorization", async (t) => {
+  const task = planTaskTargeting({ decisions: "- Edit `config/secret.env`.\n" });
+  const { root, taskRel } = await makeRepo({ agents: autoAgents(), task });
+  await writeBridgeConfig(root);
+  const clock = testClock(PLAN_ID);
+  let reviews = 0;
+  const deps = testDeps({
+    clock,
+    createAdapter: () =>
+      new FakeAdapter(
+        {
+          result: () => {
+            reviews += 1;
+            return reviews === 1 ? passResult("plan") : passResult("implementation");
+          },
+        },
+        fakeCapabilities(),
+        null,
+        {
+          mutate: async (input) => {
+            await declareImplementationReady(input.workspace_root, input.task_path);
+          },
+        },
+      ),
+  });
+  const plan = await runReview({ repo: root, task: taskRel }, deps);
+  assert.equal(plan.status?.reason_code, "review_passed");
+
+  const repoRoot = await fs.realpath(root);
+  const originalReaddir = fs.readdir.bind(fs);
+  let injected = false;
+  t.mock.method(fs, "readdir", async (...args) => {
+    if (!injected && args[0] === repoRoot) {
+      injected = true;
+      throw Object.assign(new Error("injected unreadable root"), { code: "EACCES" });
+    }
+    return originalReaddir(...args);
+  });
+
+  const outcome = await continueAfterPlanReview(plan.status!, { repo: root, task: taskRel }, deps);
+  assert.equal(injected, true);
+  assert.notEqual(outcome.transition?.reason_code, "plan_targets_unwritable_path");
+  assert.deepEqual(outcome.transition?.unwritable_plan_targets, ["config/secret.env"]);
+  const events = (
+    await fs.readFile(
+      path.join(root, ".spartan-bridge", "transitions", outcome.transition!.transition_id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; unwritable_plan_targets?: string[] | null });
+  assert.deepEqual(events.find((event) => event.type === "authorization")?.unwritable_plan_targets, [
+    "config/secret.env",
+  ]);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("ReasonCode keeps plan_targets_unwritable_path and continueAfterPlanReview does not emit it", async () => {
   const contracts = await fs.readFile(new URL("../src/core/contracts.ts", import.meta.url), "utf8");
   const transition = await fs.readFile(new URL("../src/core/transition.ts", import.meta.url), "utf8");

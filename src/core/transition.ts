@@ -79,6 +79,12 @@ export type SuccessorOutcome = {
   error: string | null;
 };
 
+const REPORT_ALL_ROOT_ENTRIES = new (class extends Set<string> {
+  override has(_value: string): boolean {
+    return true;
+  }
+})();
+
 type MutableTransition = {
   transitionDir: string;
   sequence: number;
@@ -397,7 +403,17 @@ export async function continueAfterPlanReview(
   } catch {
     return createStoppedTransition(repoRoot, plan, input.task, deps, "approved_artifact_stale");
   }
-  const unwritablePlanTargets = planTargetsUnwritablePath(approvedTaskText, admission.write_scope);
+  let rootEntries: ReadonlySet<string>;
+  try {
+    rootEntries = new Set(await fs.readdir(repoRoot));
+  } catch {
+    rootEntries = REPORT_ALL_ROOT_ENTRIES;
+  }
+  const unwritablePlanTargets = planTargetsUnwritablePath(
+    approvedTaskText,
+    admission.write_scope,
+    rootEntries,
+  );
   let launcherId: string;
   try {
     launcherId = resolveLauncherId(registry, admission.binding.client_context, admission.binding.host);

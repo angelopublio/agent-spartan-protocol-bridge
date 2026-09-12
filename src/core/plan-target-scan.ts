@@ -1,4 +1,8 @@
-import { AUTHORITY_WRITE_PATHS, isPathAdmittedByScope } from "../policy/agents-policy.ts";
+import {
+  AUTHORITY_WRITE_PATHS,
+  isAuthorityWritePath,
+  isPathAdmittedByScope,
+} from "../policy/agents-policy.ts";
 
 const PLAN_TARGET_SECTIONS = new Set(["## Scope", "## Decisions"]);
 
@@ -12,13 +16,17 @@ const KNOWN_TOP_LEVEL_NAMES = new Set([
   "CHANGELOG.md",
 ]);
 
-export function planTargetsUnwritablePath(markdown: string, writeScope: readonly string[]): string[] {
+export function planTargetsUnwritablePath(
+  markdown: string,
+  writeScope: readonly string[],
+  rootEntries: ReadonlySet<string>,
+): string[] {
   const tokens: string[] = [];
   const seen = new Set<string>();
   for (const section of collectPlanTargetSections(markdown)) {
     for (const token of extractProseBacktickTokens(section)) {
       const normalized = normalizeRepoPath(token);
-      if (normalized === null || !looksLikeRepoPath(normalized)) {
+      if (normalized === null || !looksLikeRepoPath(normalized, rootEntries)) {
         continue;
       }
       if (isUnwritablePlanTarget(normalized, writeScope) && !seen.has(normalized)) {
@@ -104,11 +112,14 @@ function normalizeRepoPath(token: string): string | null {
   return posix.startsWith("./") ? posix.slice(2) : posix;
 }
 
-function looksLikeRepoPath(posix: string): boolean {
-  if (posix.includes("/")) {
+function looksLikeRepoPath(posix: string, rootEntries: ReadonlySet<string>): boolean {
+  if (isAuthorityWritePath(posix)) {
     return true;
   }
-  return KNOWN_TOP_LEVEL_NAMES.has(posix);
+  if (!posix.includes("/")) {
+    return KNOWN_TOP_LEVEL_NAMES.has(posix);
+  }
+  return rootEntries.has(posix.split("/")[0] ?? "");
 }
 
 function isUnwritablePlanTarget(posix: string, writeScope: readonly string[]): boolean {

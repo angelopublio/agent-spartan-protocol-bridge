@@ -2,14 +2,14 @@
 protocol: "1.1.0" # x-release-please-version
 id: the-plan-target-scan-admits-illustrative-tokens
 created_at: 2026-09-05
-status: active
-phase: planning
-task_type: planning
+status: completed
+phase: complete
+task_type: implementation
 risk: material
-current_role: planner
-next_role: implementer
+current_role: human-operator
+next_role: none
 updated_at: 2026-09-12
-handoff_id: HX-002
+handoff_id: HX-004
 next_handoff_id: none
 ---
 
@@ -273,19 +273,19 @@ deliverable as deciding what it does.
 
 Derived from D1, D2 and D3 after they were pinned.
 
-- [ ] (D1) `planTargetsUnwritablePath` in `src/core/plan-target-scan.ts` takes
+- [x] (D1) `planTargetsUnwritablePath` in `src/core/plan-target-scan.ts` takes
       `(markdown: string, writeScope: readonly string[], rootEntries: ReadonlySet<string>)`
       and contains no `node:fs` import or other filesystem access.
-- [ ] (D1) `looksLikeRepoPath` matches the predicate in D1: `isAuthorityWritePath`
+- [x] (D1) `looksLikeRepoPath` matches the predicate in D1: `isAuthorityWritePath`
       first, then the unchanged `KNOWN_TOP_LEVEL_NAMES` branch for a token with
       no `/`, then `rootEntries.has` on the leading segment.
       `isAuthorityWritePath` is imported from `src/policy/agents-policy.ts`.
-- [ ] (D1) `src/core/transition.ts:400` passes a set built from one
+- [x] (D1) `src/core/transition.ts:400` passes a set built from one
       `fs.readdir(repoRoot)`. When that read throws, the call receives the
       report-everything sentinel and `continueAfterPlanReview` still reaches the
       existing `authorization` event; no new stop and no new reason code.
       `tests/transition.test.ts` covers the unreadable-root path.
-- [ ] (D1) `tests/plan-target-scan.test.ts` gains a fixture test whose
+- [x] (D1) `tests/plan-target-scan.test.ts` gains a fixture test whose
       `## Decisions` body backticks the twenty-two `0053` tokens quoted in
       Context, in that order, with a root-entry set equal to this repository's
       root listing. It asserts the returned array is exactly:
@@ -296,31 +296,31 @@ Derived from D1, D2 and D3 after they were pinned.
       "node_modules/.cache/", "node_modules/.cache/x", "node_modules/.bin",
       "agent-skill/skills/spbridge/NEW.md"]` — twelve entries, first-seen order
       preserved.
-- [ ] (D1) A second test asserts `@scope/name`, `origin/main` and
+- [x] (D1) A second test asserts `@scope/name`, `origin/main` and
       `origin/feature-x` in `## Scope` return `[]` against that same set, and a
       third asserts `vendor/thing` returns `[]` when `vendor` is absent from the
       set and `["vendor/thing"]` when it is present — the named false negative,
       pinned so it cannot change silently.
-- [ ] (D2) A test asserts `AGENTS.md` and `spartan-bridge/config.yaml` are
+- [x] (D2) A test asserts `AGENTS.md` and `spartan-bridge/config.yaml` are
       returned from a `## Decisions` body against an **empty** root-entry set,
       and from a sentence that disclaims editing them.
-- [ ] (D2) The six existing `tests/plan-target-scan.test.ts` cases keep their
+- [x] (D2) The six existing `tests/plan-target-scan.test.ts` cases keep their
       assertions; only the root-entry argument is added. The `config/secret.env`
       case passes a set containing `config`, since that directory does not exist
       in this checkout.
-- [ ] (D2) `tests/transition.test.ts:424` and `:775` pass unchanged in their
+- [x] (D2) `tests/transition.test.ts:424` and `:775` pass unchanged in their
       assertions: a plan naming `AGENTS.md` in Decisions still spawns the
       implementer and records `unwritable_plan_targets: ["AGENTS.md"]`, and an
       implementer that writes `AGENTS.md` still terminates
       `write_scope_violation` with that advisory intact.
-- [ ] (D3) `git grep` shows no new key on `TransitionStatusDocument` or
+- [x] (D3) `git grep` shows no new key on `TransitionStatusDocument` or
       `TransitionEventDocument`, no new `TransitionEventType` member, and no new
       `ReasonCode` member; `SCHEMA_VERSION` is still `2`.
-- [ ] (D1, D2) `docs/DECISIONS.md` `D-053` gains a dated 2026-09-12 amendment
+- [x] (D1, D2) `docs/DECISIONS.md` `D-053` gains a dated 2026-09-12 amendment
       stating the leading-segment root gate, the authority bypass, and the
       accepted false negative. `docs/ROUTING-AND-WORKFLOWS.md:312` replaces its
       classification sentence with one naming the same three rules.
-- [ ] `npm run typecheck` and `npm run build` clean; `npm test` adds no new
+- [x] `npm run typecheck` and `npm run build` clean; `npm test` adds no new
       failure against the pre-change baseline.
 
 ## Work Completed
@@ -344,6 +344,25 @@ Derived from D1, D2 and D3 after they were pinned.
   Evidence. Raised `risk` from `minor` to `material`: the change cannot widen a
   write boundary or stop a chain, but a wrong gate silences a genuine
   out-of-scope target on the operator's only pre-spawn signal. No code changed.
+- 2026-09-12 (implementer, Codex, session model identifier unavailable):
+  implemented the D1 root-entry gate and authority bypass, the unreadable-root
+  report-everything fallback, the D1/D2 fixture coverage, and the D-053 and
+  routing documentation amendments. The policy-bound `gpt-5.6-sol` / high
+  producer model could not be confirmed from the session identifier, so the
+  strict pre-round check proceeded under its documented warn degradation.
+- 2026-09-12 (implementer, Codex, session model identifier unavailable):
+  addressed both implementation-review findings. Corrected the full-suite baseline attribution to
+  `tests/bridge-config.test.ts:213`, then added transition-level coverage that
+  exercises the readable repository-root listing and distinguishes it from the
+  report-everything fallback.
+- 2026-09-12 (human-operator, Claude Code, claude-opus-5): closed the task on
+  the implementation-review pass. Both Bridge-owned regions record APPROVED
+  with no findings (`run-c7ae0e74` plan, `run-c4a3da3a` implementation); all
+  eleven acceptance criteria carry a recorded outcome. The full suite was
+  re-run independently of the implementer's report: 588 of 589, the single
+  failure being the pre-existing `tests/repo-hygiene.test.ts` tilde rule
+  described under Next Handoff. `dist/` was confirmed current, so no rebuild
+  is owed to the next round.
 
 ## Evidence
 
@@ -417,6 +436,25 @@ Derived from D1, D2 and D3 after they were pinned.
   `origin/main` and `origin/feature-x` returns all three, alongside `AGENTS.md`,
   `spartan-bridge/config.yaml` and `vendor/thing` from a disclaiming
   `## Decisions` sentence.
+- Implementation checks, 2026-09-12: `npm run typecheck` and `npm run build`
+  passed; `node --import tsx --test tests/plan-target-scan.test.ts` passed 11/11;
+  `node --import tsx --test tests/transition.test.ts` passed 58/58.
+- `npm test` passed 587/588. Its sole failure is the pre-existing repository
+  hygiene finding `a tilde path names a dotfile` in unchanged tracked entry
+  `tests/bridge-config.test.ts:213`; `git show HEAD:tests/bridge-config.test.ts`
+  reproduces the triggering token, and that file is absent from `git diff
+  --name-only`. None of this round's product-file changes introduces that
+  shape.
+- Correction checks, 2026-09-12: `node --import tsx --test
+  tests/transition.test.ts` passed 59/59, including the new readable-root case;
+  `node --import tsx --test tests/plan-target-scan.test.ts` passed 11/11;
+  `npm run typecheck`, `npm run build`, and `git diff --check` passed. `npm test`
+  passed 588/589 with only the same pre-existing repository-hygiene failure
+  attributed above.
+- `git diff --check` passed. `git diff -- src/core/contracts.ts` is empty, and
+  `git grep` confirms `SCHEMA_VERSION = 2` plus the existing `ReasonCode`,
+  `TransitionEventType`, and `TransitionStatusDocument` declarations; no
+  suppressed-token field, event type, or reason code was added.
 
 ## Review
 
@@ -429,6 +467,15 @@ Findings:
 
 Bridge run: run_id=run-c7ae0e74-c1a1-4f8d-a0d0-3c0a323d20bd execution_id=exec-fd5bdbbb-b950-4c58-9f09-0e5ad51dec08 review_kind=plan verdict=pass reason_code=review_passed host=codex launcher=codex-plan-reviewer-v1 model=gpt-5.6-sol effort=high model_observed=declared_unobserved policy_digest=sha256:c032b4cea31dd45976e0e4d6a6b689590f1f0a1a368378fd8a82e546eb9525a3 task_hash=sha256:7895b34f72c4f10597a9c652b45ae59a9cd834f1142e976e227c790fdfb8a732 agents_hash=sha256:6bd68578db8fd268d33c5847ff43bbf478ca1ed9c7a17c1a34df7ed723f5b8da timestamp=2026-09-12T13:05:52.205Z
 <!-- spartan-bridge:review:plan:end -->
+<!-- spartan-bridge:review:implementation:begin -->
+Verdict: APPROVED
+
+Findings:
+
+- None recorded.
+
+Bridge run: run_id=run-c4a3da3a-2eec-49fe-984b-a2262efbea80 execution_id=exec-a31b0f06-fe16-4bbb-857a-af7e030885c4 review_kind=implementation verdict=pass reason_code=review_passed host=claude launcher=claude-plan-reviewer-v1 model=claude-opus-5 effort=high model_observed=declared_unobserved policy_digest=sha256:e363264f72a848d870898b8d1d1abe453a4f1e519f622f4415d9531d867023f6 task_hash=sha256:3447b01aeb518b02c238c2066dab6b0719d1e3df55cf9342b7a22b8b64667e1c agents_hash=sha256:6bd68578db8fd268d33c5847ff43bbf478ca1ed9c7a17c1a34df7ed723f5b8da timestamp=2026-09-12T18:40:32.373Z
+<!-- spartan-bridge:review:implementation:end -->
 
 ## Blockers
 
@@ -436,11 +483,18 @@ None.
 
 ## Next Action
 
-Implement D1, D2 and D3: the leading-segment root gate with its authority
-bypass in `src/core/plan-target-scan.ts`, the one-line listing at
-`src/core/transition.ts:400`, the fixture and false-negative tests, the
-`D-053` amendment, and the `docs/ROUTING-AND-WORKFLOWS.md` sentence.
+None. The task is complete. Both reviews passed with no findings, every
+acceptance criterion has a recorded outcome, and no blocker remains.
 
 ## Next Handoff
 
-No outstanding handoff. The proposed review was consumed.
+No outstanding handoff. Task closed by the human operator on the
+implementation-review pass.
+
+Non-binding suggestion. One residual outlives this task and belongs in its own
+work rather than in a post-review edit here. `tests/repo-hygiene.test.ts:47`
+exempts a single hardcoded tilde token, `~/src/`, from `tildePathOffends`, so
+the negative fixture `~/build/` that task `0080` added at
+`tests/bridge-config.test.ts:213` fails the private-identity check even though
+it names no identity. The rule needs to recognize the fixture class rather
+than one string. Task `0081` covers when that check runs, not what it admits.
