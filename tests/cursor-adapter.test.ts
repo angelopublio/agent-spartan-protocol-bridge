@@ -151,7 +151,7 @@ test("Cursor producer spawn uses canonical repo, mapped model, sandboxed argv, a
     CURSOR_API_KEY: "must-not-forward",
     CURSOR_CONFIG_DIR: "/must/not/forward",
     AGENT_CLI_CREDENTIAL_STORE: "file",
-    AGENT_PROFILES_REAL_HOME: "/real/home/selected-by-parent",
+    AGENT_PROFILES_REAL_HOME: "/Users/someone/selected-by-parent",
   };
   const adapter = new CursorAdapter({ runner, env });
   const approved = "run-9aa88da2-de7b-479f-b838-59c09a3743ca";
@@ -193,7 +193,7 @@ test("Cursor producer spawn uses canonical repo, mapped model, sandboxed argv, a
   assert.equal(spawn.env.CURSOR_API_KEY, undefined);
   assert.equal(spawn.env.CURSOR_CONFIG_DIR, undefined);
   assert.equal(spawn.env.AGENT_CLI_CREDENTIAL_STORE, "file");
-  assert.equal(spawn.env.AGENT_PROFILES_REAL_HOME, "/real/home/selected-by-parent");
+  assert.equal(spawn.env.AGENT_PROFILES_REAL_HOME, "/Users/someone/selected-by-parent");
   assert.equal(spawn.env[PRODUCER_ISOLATED_WORKSPACE_ENV], "1");
   assert.equal(spawn.args.includes("--mode"), false);
   assert.equal(spawn.args.includes("plan"), false);
