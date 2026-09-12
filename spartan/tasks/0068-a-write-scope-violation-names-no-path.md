@@ -8,7 +8,7 @@ task_type: planning
 risk: material
 current_role: planner
 next_role: planner
-updated_at: 2026-09-03
+updated_at: 2026-09-12
 handoff_id: none
 next_handoff_id: HX-001
 ---
@@ -146,6 +146,10 @@ the decisions settle.
   that `producerDiffViolatesScope` still returns a bare boolean, that the stop
   at `src/core/transition.ts:791` passes `diagnostic: null`, and that
   `ProducerDiagnostic` has no path-shaped key.
+- 2026-09-12 (human-operator, Claude Code, claude-opus-5): recorded three
+  same-day occurrences in Evidence and the dependency they create for task
+  `0079`. Read from terminal transition records in this checkout and from a
+  redacted cross-repository summary; no decision pinned and no code changed.
 
 ## Evidence
 
@@ -160,6 +164,32 @@ the decisions settle.
   for a whitelisted Bridge-owned path list on a transition document.
 - `spartan/tasks/0067-…md` `## Review` — the `VIOLATION_NAMES_NO_PATH` finding,
   and the re-derived D2 criterion that states the limitation.
+- **Three occurrences on 2026-09-12, none naming a path.** Read from terminal
+  transition records; the two in a private consumer repository are cited by
+  id, reason code and timings only, per the rule that a run in another
+  repository carries no path, alias or host across.
+
+  | Repository | Transition | Producer time | `unwritable_plan_targets` |
+  | --- | --- | --- | --- |
+  | this one | `transition-7ff5aef6-0026-4e9d-bef3-11b6b5c008b2` | 12m56s | 5 tokens |
+  | consumer | `transition-1683c04d-250e-4f0d-a816-fe1a17e0d6d2` | 4m02s | 3 tokens |
+  | consumer | `transition-409202ce-69e7-4fbe-bee1-96a597cf6385` | 14m07s | 2 tokens |
+
+  Roughly thirty-one minutes of producer execution in one day. Each record
+  carries four events — `authorization`, `lock_acquired`, `producer_started`,
+  `terminal_stop` — `producer_diagnostic: null`, and no field identifying what
+  the child actually wrote. In this repository's own case the advisory listed
+  `spartan-bridge/config.yaml`, `AGENTS.md`, `node_modules/.cache/`, `.next/`
+  and `dist/`; that list is what the plan mentioned, not what the producer
+  wrote, so it does not identify the violation even where it happens to
+  overlap.
+- **The cost compounds into another task.** All five auto-chain transitions in
+  that consumer repository are `stopped` with `linked_review_run_ids: []`;
+  none reached an implementation review. Task `0079`'s AC-16 needs exactly
+  such an observation from a repository whose declared client context differs
+  from the machine default, so it cannot be recorded until a chain there gets
+  past the producer guard — and the operator cannot find out why it does not,
+  because the stop names nothing. This task gates `0079`.
 
 ## Review
 
