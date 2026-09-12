@@ -142,6 +142,8 @@ test("spbridge skill recovers producer_declaration_invalid in a fresh implemente
   const skill = await fs.readFile(new URL("../agent-skill/skills/spbridge/SKILL.md", import.meta.url), "utf8");
   assert.match(skill, /Quote `declaration_invalid_detail` when that\n  field is a non-null string/);
   assert.match(skill, /Quote `unwritable_plan_targets` when that field is a\n  non-null array/);
+  assert.match(skill, /Quote `producer_refused_paths` when that field is a\n  non-null array/);
+  assert.match(skill, /Those tokens name what the producer wrote, in contrast with\n  `unwritable_plan_targets`, which names what the plan mentioned/);
   assert.match(
     skill,
     /Those tokens are an advisory that the approved plan mentioned\n  paths outside the automatic write scope; they are not a stop and do not replace\n  `state` or `reason_code`/,

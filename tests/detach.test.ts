@@ -483,6 +483,7 @@ test("waitForRun: terminal write_scope_violation still includes unwritable_plan_
       reason_code: "write_scope_violation",
       producer_diagnostic: null,
       unwritable_plan_targets: ["AGENTS.md"],
+      producer_refused_paths: ["spartan-bridge/config.yaml"],
       declaration_invalid_detail: null,
       current_review_run_id: null,
       linked_review_run_ids: [],
@@ -496,6 +497,7 @@ test("waitForRun: terminal write_scope_violation still includes unwritable_plan_
   assert.equal(outcome.done && outcome.exitCode, 1);
   assert.ok(outcome.done && outcome.document.includes('"reason_code":"write_scope_violation"'));
   assert.ok(outcome.done && outcome.document.includes('"unwritable_plan_targets":["AGENTS.md"]'));
+  assert.ok(outcome.done && outcome.document.includes('"producer_refused_paths":["spartan-bridge/config.yaml"]'));
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -842,6 +844,7 @@ function transitionEventLine(
     reason_code: null,
     producer_diagnostic: null,
     unwritable_plan_targets: null,
+    producer_refused_paths: null,
     declaration_invalid_detail: null,
     review_run_id: reviewRunId,
   })}\n`;
@@ -858,6 +861,7 @@ async function seedDetachedChain(input: {
   currentReviewRunId?: string | null;
   deadPid?: number;
   unwritablePlanTargets?: string[] | null;
+  producerRefusedPaths?: string[] | null;
 }): Promise<void> {
   const runDir = path.join(input.root, ".spartan-bridge", "runs", input.runId);
   await fs.mkdir(runDir, { recursive: true });
@@ -885,6 +889,7 @@ async function seedDetachedChain(input: {
       reason_code: null,
       producer_diagnostic: null,
       unwritable_plan_targets: input.unwritablePlanTargets ?? null,
+      producer_refused_paths: input.producerRefusedPaths ?? null,
       declaration_invalid_detail: null,
       current_review_run_id: input.currentReviewRunId ?? null,
       linked_review_run_ids: input.linkedReviewRunIds ?? [],
@@ -1150,20 +1155,23 @@ test("resumeInterrupted: producer_started death stays interrupted", async () => 
     events,
     transitionState: "producer_running",
     unwritablePlanTargets: ["AGENTS.md"],
+    producerRefusedPaths: ["spartan-bridge/config.yaml"],
   });
   const report = await resumeInterrupted(root, () => Date.parse("2026-08-31T01:00:00.000Z"), testDeps());
   assert.equal(report.acted, true);
   const trans = JSON.parse(
     await fs.readFile(path.join(root, ".spartan-bridge", "transitions", transitionId, "status.json"), "utf8"),
-  ) as { state: string; reason_code: string; unwritable_plan_targets: string[] | null };
+  ) as { state: string; reason_code: string; unwritable_plan_targets: string[] | null; producer_refused_paths: string[] | null };
   assert.equal(trans.state, "stopped");
   assert.equal(trans.reason_code, "interrupted");
   assert.deepEqual(trans.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(trans.producer_refused_paths, ["spartan-bridge/config.yaml"]);
   const eventLines = (await fs.readFile(path.join(root, ".spartan-bridge", "transitions", transitionId, "events.jsonl"), "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { type: string; unwritable_plan_targets?: string[] | null });
+    .map((line) => JSON.parse(line) as { type: string; unwritable_plan_targets?: string[] | null; producer_refused_paths?: string[] | null });
   assert.deepEqual(eventLines.at(-1)?.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(eventLines.at(-1)?.producer_refused_paths, ["spartan-bridge/config.yaml"]);
   await fs.rm(root, { recursive: true, force: true });
 });
 

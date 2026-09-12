@@ -544,6 +544,7 @@ export type TransitionStatusDocument = {
   reason_code: ReasonCode | null;
   producer_diagnostic: ProducerDiagnostic | null;
   unwritable_plan_targets: string[] | null;
+  producer_refused_paths: string[] | null;
   declaration_invalid_detail: string | null;
   current_review_run_id: string | null;
   linked_review_run_ids: readonly string[];
@@ -561,6 +562,7 @@ export type TransitionEventDocument = {
   reason_code: ReasonCode | null;
   producer_diagnostic: ProducerDiagnostic | null;
   unwritable_plan_targets: string[] | null;
+  producer_refused_paths: string[] | null;
   declaration_invalid_detail: string | null;
   review_run_id: string | null;
 };

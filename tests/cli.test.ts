@@ -15,6 +15,7 @@ import {
   formatPlanReviewRecoveryLine,
   formatReviewTerminalLine,
   formatTransitionTerminalLine,
+  renderPrintableAsciiQuotedLiteral,
   isPlanReviewRecoveryEligible,
   isBuildStale,
   localDateTime,
@@ -1606,11 +1607,12 @@ test("header and terminal derive local strings from status timestamps under pinn
     state: "stopped",
     reason_code: "write_scope_violation",
     unwritable_plan_targets: ["AGENTS.md"],
+    producer_refused_paths: ["spartan-bridge/config.yaml"],
     declaration_invalid_detail: null,
   } as TransitionStatusDocument;
   assert.equal(
     formatTransitionTerminalLine(advisoryOnOtherStop, tracker),
-    "      06:18:48 implementer stopped reason=write_scope_violation targets=AGENTS.md took 2m59s\n",
+    "      06:18:48 implementer stopped reason=write_scope_violation targets=AGENTS.md wrote=\"spartan-bridge/config.yaml\" took 2m59s\n",
   );
   const declarationStop = {
     created_at: OWNER_CREATED_AT,
@@ -1618,6 +1620,7 @@ test("header and terminal derive local strings from status timestamps under pinn
     state: "stopped",
     reason_code: "producer_declaration_invalid",
     declaration_invalid_detail: "opening_shape",
+    producer_refused_paths: ["must-not-render"],
   } as TransitionStatusDocument;
   assert.equal(
     formatTransitionTerminalLine(declarationStop, tracker),
@@ -1628,6 +1631,48 @@ test("header and terminal derive local strings from status timestamps under pinn
   assert.equal(formatDuration(179_999), "2m59s");
   assert.equal(formatDuration(5_000), "5s");
   assert.equal(formatDuration(3_661_000), "1h1m1s");
+
+  const hostilePaths = [
+    "a,b",
+    'quote\"slash\\',
+    "line\n\ttab",
+    "delete\u007fcontrol\u0085",
+    "escape\u001b[31m",
+    "caf\u00e9",
+    "emoji-😀",
+  ];
+  for (const entry of hostilePaths) {
+    const literal = renderPrintableAsciiQuotedLiteral(entry);
+    assert.match(literal, /^"[\x20-\x7e]*"$/);
+    assert.equal(JSON.parse(literal), entry);
+  }
+  assert.equal(renderPrintableAsciiQuotedLiteral("emoji-😀"), '"emoji-\\ud83d\\ude00"');
+
+  const commaLine = formatTransitionTerminalLine({
+    created_at: OWNER_CREATED_AT,
+    updated_at: OWNER_UPDATED_AT,
+    state: "stopped",
+    reason_code: "write_scope_violation",
+    producer_refused_paths: ["one,two", "three"],
+    unwritable_plan_targets: null,
+    declaration_invalid_detail: null,
+  } as TransitionStatusDocument, tracker);
+  const wroteValue = commaLine.slice(commaLine.indexOf(" wrote=") + 7, commaLine.indexOf(" took "));
+  assert.deepEqual(JSON.parse(`[${wroteValue}]`), ["one,two", "three"]);
+
+  const hostileStop = {
+    created_at: OWNER_CREATED_AT,
+    updated_at: OWNER_UPDATED_AT,
+    state: "stopped",
+    reason_code: "runtime_state_violation",
+    producer_refused_paths: hostilePaths,
+    unwritable_plan_targets: null,
+    declaration_invalid_detail: null,
+  } as TransitionStatusDocument;
+  const line = formatTransitionTerminalLine(hostileStop, tracker);
+  assert.equal(line.split("\n").length, 2);
+  assert.equal(line.endsWith("\n"), true);
+  assert.match(line.slice(0, -1), /^[\x20-\x7e]*$/);
   const align: LocalDayTracker = { lastDayKey: undefined };
   assert.equal(formatAlignedPrefix(Date.parse(OWNER_CREATED_AT), align), "19/08 06:15:49 ");
   assert.equal(formatAlignedPrefix(Date.parse("2026-08-19T09:15:52.000Z"), align), "      06:15:52 ");

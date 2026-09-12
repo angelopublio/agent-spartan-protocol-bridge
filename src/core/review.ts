@@ -86,6 +86,8 @@ export type AppDeps = {
   producerSnapshotCaps?: Partial<Record<ProducerSnapshotSite, { entries?: number; hashBytes?: number }>>;
   // Deterministic seam for the documented post-productAfter hard-link window.
   afterProducerSnapshots?: () => void | Promise<void>;
+  // Deterministic seam for transition-level merge rollback regressions.
+  applyProducerMergeDeps?: import("./workspace.ts").ApplyProducerMergeDeps;
 };
 
 export type ReviewCommandInput = {

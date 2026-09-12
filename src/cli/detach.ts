@@ -543,6 +543,7 @@ async function persistInterruptedTransition(
     reason_code: "interrupted",
     producer_diagnostic: null,
     unwritable_plan_targets: transition.unwritable_plan_targets,
+    producer_refused_paths: transition.producer_refused_paths,
     declaration_invalid_detail: null,
     review_run_id: null,
   });

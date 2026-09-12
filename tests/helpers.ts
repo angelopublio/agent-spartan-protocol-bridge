@@ -417,6 +417,7 @@ export function testDeps(options?: {
   clock?: Clock;
   snapshotCaps?: { entries?: number; hashBytes?: number };
   producerSnapshotCaps?: AppDeps["producerSnapshotCaps"];
+  applyProducerMergeDeps?: AppDeps["applyProducerMergeDeps"];
 }): AppDeps {
   const source = options?.source ?? constantSource(passResult());
   return {
@@ -425,6 +426,7 @@ export function testDeps(options?: {
     clock: options?.clock ?? testClock(),
     snapshotCaps: options?.snapshotCaps,
     producerSnapshotCaps: options?.producerSnapshotCaps,
+    applyProducerMergeDeps: options?.applyProducerMergeDeps,
   };
 }
 

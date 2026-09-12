@@ -27,11 +27,14 @@ import {
   PRODUCER_DEFAULT_SCRATCH_PREFIXES,
   PRODUCER_MERGE_BYTE_CAP,
   PRODUCER_MERGE_ENTRY_CAP,
+  PRODUCER_REFUSED_PATH_BYTES,
+  PRODUCER_REFUSED_PATH_CAP,
   ProducerMergeError,
   PRODUCER_SUPPORT_SCRATCH_PREFIXES,
   PRODUCER_SUPPORT_SCOPE,
   resolveProducerScratchPrefixes,
   resolveMergeDestinations,
+  boundProducerRefusedPaths,
 } from "../src/core/workspace.ts";
 import { validAgentsMd } from "./helpers.ts";
 
@@ -267,6 +270,68 @@ test("capture refuses a content edit of the carried authority file under the rea
     await fs.writeFile(replacement, "changed authority\n", { mode: 0o444 });
     await fs.rename(replacement, authorityPath);
   });
+});
+
+test("ProducerMergeError keeps unrestored and refused paths as separate lists", () => {
+  const bare = new ProducerMergeError();
+  assert.deepEqual(bare.unrestored, []);
+  assert.deepEqual(bare.refusedPaths, []);
+  const rollback = new ProducerMergeError("runtime_state_violation", ["src/a.ts"]);
+  assert.deepEqual(rollback.unrestored, ["src/a.ts"]);
+  assert.deepEqual(rollback.refusedPaths, []);
+});
+
+test("refused path bounds keep the first 20 and retain UTF-8-safe tails", () => {
+  assert.equal(PRODUCER_REFUSED_PATH_CAP, 20);
+  assert.equal(PRODUCER_REFUSED_PATH_BYTES, 256);
+  const ordered = Array.from({ length: 25 }, (_, index) => `${String(index).padStart(2, "0")}.txt`);
+  assert.deepEqual(boundProducerRefusedPaths(ordered), ordered.slice(0, 20));
+
+  const exact = "x".repeat(256);
+  assert.equal(boundProducerRefusedPaths([exact])[0], exact);
+  const long = `prefix/${"😀".repeat(100)}/tail.txt`;
+  const bounded = boundProducerRefusedPaths([long]);
+  assert.equal(bounded.length, 1);
+  assert.equal(bounded[0]?.startsWith(".../"), true);
+  assert.equal(Buffer.byteLength(bounded[0]!, "utf8") <= 260, true);
+  assert.equal(long.endsWith(bounded[0]!.slice(4)), true);
+  assert.equal(bounded[0]!.includes("�"), false);
+  assert.deepEqual(boundProducerRefusedPaths(bounded), bounded);
+  assert.notEqual(Buffer.byteLength(long, "utf8"), long.length);
+  assert.notEqual(Buffer.byteLength(long, "utf8"), [...long].length);
+});
+
+test("classification pre-pass reports every refused path before reading an admitted file", async () => {
+  const root = await fixture();
+  const prepared = await prepareProducerWorkspace({ repoRoot: root, writeScope: SCOPE, supportScope: [] });
+  try {
+    await fs.writeFile(path.join(prepared.workspaceRoot, "src", "a.ts"), "changed\n");
+    await fs.writeFile(path.join(prepared.workspaceRoot, "z-secret.txt"), "refused\n");
+    await fs.writeFile(path.join(prepared.workspaceRoot, "zz-secret.txt"), "also refused\n");
+    const after = await snapshotPreparedProducerWorkspace(prepared);
+    let reads = 0;
+    await assert.rejects(
+      () => captureProducerMerge(
+        {
+          workspaceRoot: prepared.workspaceRoot,
+          baseline: prepared.baseline,
+          after,
+          writeScope: SCOPE,
+          supportScope: [],
+        },
+        { beforeFileRead: () => { reads += 1; } },
+      ),
+      (error: unknown) => error instanceof ProducerMergeError &&
+        error.reason === "write_scope_violation" &&
+        error.refusedPaths.length === 2 &&
+        error.refusedPaths[0] === "z-secret.txt" &&
+        error.refusedPaths[1] === "zz-secret.txt",
+    );
+    assert.equal(reads, 0);
+  } finally {
+    await cleanupProducerWorkspace(prepared.workspaceRoot);
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("capture refuses a mode-only edit of the carried authority file under the real automatic scope", async () => {
@@ -946,7 +1011,8 @@ test("rollback restores existing special modes, nested deleted directories, and 
     ),
     (error: unknown) => error instanceof ProducerMergeError
       && error.reason === "runtime_state_violation"
-      && error.unrestored.includes("src/a.ts"),
+      && error.unrestored.includes("src/a.ts")
+      && error.refusedPaths.length === 0,
   );
   await assert.rejects(fs.access(path.join(root, "src", "a.ts")));
   assert.equal((await fs.readdir(path.join(root, "src"))).some((name) => name.includes(".rollback-")), false);

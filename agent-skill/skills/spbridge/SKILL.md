@@ -287,7 +287,10 @@ producer transition.
   field is a non-null string. Quote `unwritable_plan_targets` when that field is a
   non-null array. Those tokens are an advisory that the approved plan mentioned
   paths outside the automatic write scope; they are not a stop and do not replace
-  `state` or `reason_code`. Print no implementer recommendation.
+  `state` or `reason_code`. Quote `producer_refused_paths` when that field is a
+  non-null array. Those tokens name what the producer wrote, in contrast with
+  `unwritable_plan_targets`, which names what the plan mentioned. Print no
+  implementer recommendation.
 - If `verdict` is not null, report that verdict by name.
 - Otherwise report `reason_code` by name.
 

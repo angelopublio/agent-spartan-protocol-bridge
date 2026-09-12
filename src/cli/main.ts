@@ -210,7 +210,24 @@ export function formatTransitionTerminalLine(status: TransitionStatusDocument, t
     status.reason_code === "producer_declaration_invalid" && status.declaration_invalid_detail !== null
       ? ` detail=${status.declaration_invalid_detail}`
       : "";
-  return `${prefix}implementer ${status.state} reason=${status.reason_code}${targets}${detail} took ${duration}\n`;
+  const wrote =
+    status.producer_refused_paths != null &&
+    (status.reason_code === "write_scope_violation" || status.reason_code === "runtime_state_violation")
+      ? ` wrote=${status.producer_refused_paths.map(renderPrintableAsciiQuotedLiteral).join(",")}`
+      : "";
+  return `${prefix}implementer ${status.state} reason=${status.reason_code}${targets}${detail}${wrote} took ${duration}\n`;
+}
+
+export function renderPrintableAsciiQuotedLiteral(entry: string): string {
+  const json = JSON.stringify(entry);
+  let rendered = "";
+  for (let index = 0; index < json.length; index += 1) {
+    const unit = json.charCodeAt(index);
+    rendered += unit >= 0x20 && unit <= 0x7e
+      ? json[index]
+      : `\\u${unit.toString(16).padStart(4, "0")}`;
+  }
+  return rendered;
 }
 
 function seedTrackerFromCreatedAt(createdAt: string, tracker: LocalDayTracker): void {

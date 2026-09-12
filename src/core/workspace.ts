@@ -17,6 +17,11 @@ import path from "node:path";
 import type { ReasonCode, SnapshotDiffEntry, WorkspaceManifest, WorkspaceManifestFileEntry } from "./contracts.ts";
 import { sha256Bytes } from "./serialize.ts";
 import {
+  boundProducerRefusedPaths,
+  PRODUCER_REFUSED_PATH_BYTES as REFUSED_PATH_BYTES,
+  PRODUCER_REFUSED_PATH_CAP as REFUSED_PATH_CAP,
+} from "./producer-refused-paths.ts";
+import {
   isPrefixMember,
   producerPathDenied,
   snapshotTree,
@@ -45,6 +50,9 @@ export const PRODUCER_DEFAULT_SCRATCH_PREFIXES = [
 ] as const;
 export const PRODUCER_MERGE_ENTRY_CAP = 2_000;
 export const PRODUCER_MERGE_BYTE_CAP = 64 * 1024 * 1024;
+export const PRODUCER_REFUSED_PATH_CAP = REFUSED_PATH_CAP;
+export const PRODUCER_REFUSED_PATH_BYTES = REFUSED_PATH_BYTES;
+export { boundProducerRefusedPaths } from "./producer-refused-paths.ts";
 
 const SOURCE_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM"] as const;
 const OID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -1108,13 +1116,16 @@ export class ProducerMergeError extends Error {
   override readonly name = "ProducerMergeError";
   readonly reason: Extract<ReasonCode, "write_scope_violation" | "runtime_state_violation">;
   readonly unrestored: readonly string[];
+  readonly refusedPaths: readonly string[];
   constructor(
     reason: Extract<ReasonCode, "write_scope_violation" | "runtime_state_violation"> = "write_scope_violation",
     unrestored: readonly string[] = [],
+    refusedPaths: readonly string[] = [],
   ) {
     super(reason);
     this.reason = reason;
     this.unrestored = [...unrestored];
+    this.refusedPaths = [...refusedPaths];
   }
 }
 
@@ -1536,6 +1547,23 @@ export async function captureProducerMerge(input: {
   const diff = workspaceDiff(input.baseline, input.after).filter(
     (entry) => entry.path !== "." && !isStructuralProducerDirectoryDiff(entry, input.baseline, input.after),
   );
+  const refusedPaths = diff.flatMap((entry) => {
+    const classification = classifyProducerWorkspacePath(
+      entry.path,
+      input.writeScope,
+      input.supportScope,
+      input.scratchPrefixes,
+    );
+    if (classification === "scratch") {
+      return [];
+    }
+    return classification !== "admitted" || isAuthorityWritePath(entry.path) || producerPathDenied(entry.path)
+      ? [entry.path]
+      : [];
+  });
+  if (refusedPaths.length > 0) {
+    throw new ProducerMergeError("write_scope_violation", [], boundProducerRefusedPaths(refusedPaths));
+  }
   for (const entry of diff) {
     const classification = classifyProducerWorkspacePath(
       entry.path,
@@ -1546,9 +1574,8 @@ export async function captureProducerMerge(input: {
     if (classification === "scratch") {
       continue;
     }
-    if (classification !== "admitted" || isAuthorityWritePath(entry.path) || producerPathDenied(entry.path)) {
-      throw new ProducerMergeError();
-    }
+    // The classification pre-pass above has already refused every path that
+    // is not admitted, including authority and denied paths.
     try {
       validateRepositoryPath(entry.path);
     } catch {

@@ -1525,3 +1525,42 @@ the snapshot hashing guarantees or the producer's write authority.
 that output from both full-hash copy snapshots without widening merge authority.
 A contradictory declaration fails loudly, while a repository that admits its own
 `dist/` no longer loses those product edits to an inherited default.
+
+## D-077 — Producer violation stops name bounded refused paths (task 0068)
+
+**Decision:** Transition status and event documents now carry the required,
+nullable `producer_refused_paths` field. The Bridge populates it on exactly three
+stop sources: a Bridge-runtime snapshot diff, a live-repository product snapshot
+diff excluding the `.` root entry, and the isolated-workspace classification
+pre-pass. The pre-pass collects every refused path before the capture loop reads
+any file and carries them separately from `ProducerMergeError.unrestored`; the
+rollback-failure `unrestored` list is not surfaced by this field.
+
+Lists keep the first 20 paths in snapshot-diff order. Each path keeps at most the
+last 256 UTF-8 bytes, advanced to a character boundary and prefixed with `.../`
+when truncated, so a path is never omitted solely for length and a stored token
+is at most 260 bytes. The marker is conventional rather than unforgeable: a real
+path beginning with a literal `...` segment may look the same, but a truncated
+token remains an identifying suffix of the actual path. To keep a captured token
+byte-stable when the transition serializer applies the same bound, a token that
+already begins `.../` and occupies at most 260 bytes is treated as conventionally
+truncated. The marker ambiguity therefore also means a foreign persisted token in
+that exact shape cannot be distinguished from a Bridge-truncated one.
+
+Runtime-state tokens are relative to the `.spartan-bridge` ownership root rather
+than the repository root. They include the `.` snapshot entry when that ownership
+root itself changes; unlike the live-product arm, the approved runtime-diff arm
+does not filter it, so it can occupy one of the 20 positions.
+
+**Rationale:** `unwritable_plan_targets` reports what an approved plan mentioned;
+it cannot identify an unplanned path that the producer actually changed. The new
+field records Bridge-observed evidence at the guard that refused the round while
+keeping `ProducerDiagnostic` closed and free of paths.
+
+**Consequence:** Terminal output appends ` wrote=` for `write_scope_violation`
+and `runtime_state_violation`. Each entry is JSON-stringified and then walked by
+UTF-16 code unit; every unit outside printable ASCII is rendered as a lowercase
+four-digit `\\u` escape. Supplementary characters therefore become two surrogate
+escapes, and every quoted token remains one-line, printable ASCII, and
+JSON-round-trippable. Missing or malformed persisted values normalize to `null`;
+the additive document change keeps schema version 2.

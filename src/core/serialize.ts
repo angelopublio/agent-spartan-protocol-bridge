@@ -21,6 +21,7 @@ import {
   type TransitionEventDocument,
   type TransitionStatusDocument,
 } from "./contracts.ts";
+import { boundProducerRefusedPaths } from "./producer-refused-paths.ts";
 
 export function sha256Bytes(bytes: Uint8Array | string): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -216,6 +217,7 @@ export function serializeTransitionStatus(status: TransitionStatusDocument): str
     reason_code: status.reason_code,
     producer_diagnostic: serializeProducerDiagnostic(status.producer_diagnostic),
     unwritable_plan_targets: serializeUnwritablePlanTargets(status.unwritable_plan_targets),
+    producer_refused_paths: serializeProducerRefusedPaths(status.producer_refused_paths),
     declaration_invalid_detail: serializeDeclarationInvalidDetail(status.declaration_invalid_detail),
     current_review_run_id: status.current_review_run_id,
     linked_review_run_ids: [...status.linked_review_run_ids],
@@ -235,6 +237,7 @@ export function serializeTransitionEvent(event: TransitionEventDocument): string
     reason_code: event.reason_code,
     producer_diagnostic: serializeProducerDiagnostic(event.producer_diagnostic),
     unwritable_plan_targets: serializeUnwritablePlanTargets(event.unwritable_plan_targets),
+    producer_refused_paths: serializeProducerRefusedPaths(event.producer_refused_paths),
     declaration_invalid_detail: serializeDeclarationInvalidDetail(event.declaration_invalid_detail),
     review_run_id: event.review_run_id,
   })}\n`;
@@ -253,6 +256,7 @@ export function parseTransitionStatusJson(text: string): TransitionStatusDocumen
           snapshot_cap: diagnostic.snapshot_cap ?? null,
         },
     unwritable_plan_targets: serializeUnwritablePlanTargets(parsed.unwritable_plan_targets),
+    producer_refused_paths: serializeProducerRefusedPaths(parsed.producer_refused_paths),
     declaration_invalid_detail: serializeDeclarationInvalidDetail(parsed.declaration_invalid_detail),
   };
 }
@@ -263,6 +267,14 @@ function serializeUnwritablePlanTargets(tokens: string[] | null | undefined): st
   }
   const copied = tokens.filter((token): token is string => typeof token === "string");
   return copied.length === 0 ? null : copied;
+}
+
+export function serializeProducerRefusedPaths(tokens: unknown): string[] | null {
+  if (!Array.isArray(tokens) || tokens.length === 0) {
+    return null;
+  }
+  const copied = tokens.filter((token): token is string => typeof token === "string");
+  return copied.length === 0 ? null : boundProducerRefusedPaths(copied);
 }
 
 function serializeDeclarationInvalidDetail(value: string | null | undefined): string | null {

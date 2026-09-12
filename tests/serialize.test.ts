@@ -40,6 +40,7 @@ function baseTransitionStatus(producerDiagnostic: ProducerDiagnostic | null): Tr
     reason_code: "producer_failure",
     producer_diagnostic: producerDiagnostic,
     unwritable_plan_targets: null,
+    producer_refused_paths: null,
     declaration_invalid_detail: null,
     current_review_run_id: null,
     linked_review_run_ids: [],
@@ -523,9 +524,74 @@ test("parseTransitionStatusJson normalizes a missing producer_diagnostic key to 
   const parsed = parseTransitionStatusJson(oldBytes);
   assert.equal(parsed.producer_diagnostic, null);
   assert.equal(parsed.unwritable_plan_targets, null);
+  assert.equal(parsed.producer_refused_paths, null);
   assert.equal(parsed.declaration_invalid_detail, null);
   assert.equal(parsed.transition_id, "transition-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   assert.equal(parsed.state, "stopped");
+});
+
+test("producer_refused_paths normalizes malformed persisted values and bounds valid strings", () => {
+  const values = Array.from({ length: 25 }, (_, index) => `${String(index).padStart(2, "0")}.txt`);
+  const raw = serializeTransitionStatus({
+    ...baseTransitionStatus(null),
+    reason_code: "write_scope_violation",
+    producer_refused_paths: [values[0]!, 12 as never, ...values.slice(1)],
+  });
+  const persisted = JSON.parse(raw) as TransitionStatusDocument;
+  assert.equal(persisted.producer_refused_paths?.length, 20);
+  assert.deepEqual(persisted.producer_refused_paths, values.slice(0, 20));
+
+  const exact = "x".repeat(256);
+  const exactPersisted = JSON.parse(serializeTransitionStatus({
+    ...baseTransitionStatus(null),
+    producer_refused_paths: [exact],
+  })) as TransitionStatusDocument;
+  assert.deepEqual(exactPersisted.producer_refused_paths, [exact]);
+
+  const long = `prefix/${"😀".repeat(100)}/tail.txt`;
+  const longPersisted = JSON.parse(serializeTransitionStatus({
+    ...baseTransitionStatus(null),
+    reason_code: "write_scope_violation",
+    producer_refused_paths: [long],
+  })) as TransitionStatusDocument;
+  assert.equal(longPersisted.producer_refused_paths?.length, 1);
+  assert.equal(Buffer.byteLength(longPersisted.producer_refused_paths![0]!, "utf8") <= 260, true);
+  assert.equal(longPersisted.producer_refused_paths?.[0]?.startsWith(".../"), true);
+  assert.equal(long.endsWith(longPersisted.producer_refused_paths![0]!.slice(4)), true);
+
+  const event = JSON.parse(serializeTransitionEvent({
+    schema_version: 2,
+    sequence: 1,
+    timestamp: "2026-08-23T12:00:01.000Z",
+    transition_id: "transition-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    type: "terminal_stop",
+    state: "stopped",
+    reason_code: "write_scope_violation",
+    producer_diagnostic: null,
+    unwritable_plan_targets: null,
+    producer_refused_paths: ["one", 2 as never, "two"],
+    declaration_invalid_detail: null,
+    review_run_id: null,
+  })) as TransitionEventDocument;
+  assert.deepEqual(event.producer_refused_paths, ["one", "two"]);
+
+  for (const producer_refused_paths of [undefined, "x", [], [1, false]]) {
+    const parsed = parseTransitionStatusJson(JSON.stringify({
+      ...baseTransitionStatus(null),
+      producer_refused_paths,
+    }));
+    assert.equal(parsed.producer_refused_paths, null);
+  }
+});
+
+test("a historical transition without producer_refused_paths parses unchanged except for null defaults", () => {
+  const historical = { ...baseTransitionStatus(null) } as Record<string, unknown>;
+  delete historical.producer_refused_paths;
+  const parsed = parseTransitionStatusJson(JSON.stringify(historical));
+  assert.equal(parsed.producer_refused_paths, null);
+  assert.equal(parsed.transition_id, historical.transition_id);
+  assert.equal(parsed.reason_code, historical.reason_code);
+  assert.equal(parsed.unwritable_plan_targets, historical.unwritable_plan_targets);
 });
 
 test("serializeTransitionStatus copies unwritable_plan_targets and parse normalizes missing or empty to null", () => {
@@ -570,6 +636,7 @@ test("serializeTransitionStatus copies declaration_invalid_detail and parse norm
     reason_code: "producer_declaration_invalid",
     producer_diagnostic: null,
     unwritable_plan_targets: null,
+    producer_refused_paths: null,
     declaration_invalid_detail: "artifact_unchanged",
     review_run_id: null,
   });

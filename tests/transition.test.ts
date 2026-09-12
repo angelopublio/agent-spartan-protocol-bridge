@@ -870,6 +870,58 @@ test("an out-of-scope producer write is a write_scope_violation", async () => {
   );
   assert.equal(outcome.kind, "transition");
   assert.equal(outcome.transition?.reason_code, "write_scope_violation");
+  assert.deepEqual(outcome.transition?.producer_refused_paths, ["secret.txt"]);
+  assert.equal(outcome.transition?.producer_diagnostic, null);
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.deepEqual(terminal.producer_refused_paths, ["secret.txt"]);
+  assert.equal(terminal.producer_diagnostic, null);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("a root-only live repository diff proceeds past the write-scope stop", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(root);
+  let reviews = 0;
+  const source = {
+    result: () => {
+      reviews += 1;
+      return reviews === 1 ? passResult("plan") : passResult("implementation");
+    },
+  };
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: chainClock(),
+      createAdapter: () => mutatingProducer(source, async (_workspace, _task, liveRoot) => {
+        const before = await fs.stat(liveRoot);
+        await fs.chmod(liveRoot, (before.mode & 0o7777) ^ 0o001);
+      }),
+    }),
+  );
+  assert.notEqual(outcome.transition?.reason_code, "write_scope_violation");
+  assert.equal(outcome.transition?.producer_refused_paths, null);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("a live repository write reports non-root productDiff paths", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(root);
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: testClock(PLAN_ID),
+      createAdapter: () => mutatingProducer({ result: () => passResult("plan") }, async (_workspace, _task, liveRoot) => {
+        await fs.writeFile(path.join(liveRoot, "live-only.txt"), "outside isolation\n", "utf8");
+      }),
+    }),
+  );
+  assert.equal(outcome.kind, "transition");
+  assert.equal(outcome.transition?.reason_code, "write_scope_violation");
+  assert.deepEqual(outcome.transition?.producer_refused_paths, ["live-only.txt"]);
+  assert.equal(outcome.transition?.producer_refused_paths?.includes("."), false);
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.deepEqual(terminal.producer_refused_paths, ["live-only.txt"]);
+  assert.equal(terminal.producer_refused_paths?.includes("."), false);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -893,6 +945,7 @@ test("an implementer that writes AGENTS.md after an advisory scan still stops wr
   assert.equal(outcome.kind, "transition");
   assert.equal(outcome.transition?.reason_code, "write_scope_violation");
   assert.deepEqual(outcome.transition?.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(outcome.transition?.producer_refused_paths, ["AGENTS.md"]);
   const events = (
     await fs.readFile(
       path.join(root, ".spartan-bridge", "transitions", outcome.transition!.transition_id, "events.jsonl"),
@@ -901,9 +954,40 @@ test("an implementer that writes AGENTS.md after an advisory scan still stops wr
   )
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { type: string; unwritable_plan_targets?: string[] | null });
+    .map((line) => JSON.parse(line) as TransitionEventDocument);
   assert.deepEqual(events.find((event) => event.type === "authorization")?.unwritable_plan_targets, ["AGENTS.md"]);
   assert.deepEqual(events.at(-1)?.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(events.at(-1)?.producer_refused_paths, ["AGENTS.md"]);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("an isolated config write is identified independently from advisory plan targets", async () => {
+  const task = planTaskTargeting({ decisions: "- Mention `AGENTS.md` in prose.\n" });
+  const { root, taskRel } = await makeRepo({ agents: autoAgents(), task });
+  await writeBridgeConfig(root);
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: testClock(PLAN_ID),
+      createAdapter: () => mutatingProducer({ result: () => passResult("plan") }, async (workspace) => {
+        await fs.mkdir(path.join(workspace, "spartan-bridge"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "spartan-bridge", "config.yaml"), "changed\n", "utf8");
+      }),
+    }),
+  );
+  assert.equal(outcome.kind, "transition");
+  assert.equal(outcome.transition?.reason_code, "write_scope_violation");
+  assert.deepEqual(outcome.transition?.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(outcome.transition?.producer_refused_paths, [
+    "spartan-bridge",
+    "spartan-bridge/config.yaml",
+  ]);
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.deepEqual(terminal.unwritable_plan_targets, ["AGENTS.md"]);
+  assert.deepEqual(terminal.producer_refused_paths, [
+    "spartan-bridge",
+    "spartan-bridge/config.yaml",
+  ]);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -921,6 +1005,7 @@ test("exit 0 without a coherent declaration is producer_declaration_invalid", as
   assert.equal(outcome.transition?.reason_code, "producer_declaration_invalid");
   assert.equal(outcome.transition?.declaration_invalid_detail, "artifact_unchanged");
   assert.equal(outcome.transition?.producer_diagnostic, null);
+  assert.equal(outcome.transition?.producer_refused_paths, null);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -1079,6 +1164,40 @@ test("a runtime-state mutation during the producer window is a runtime_state_vio
     }),
   );
   assert.equal(outcome.transition?.reason_code, "runtime_state_violation");
+  assert.deepEqual(outcome.transition?.producer_refused_paths, [".", "planted", "planted/x"]);
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.deepEqual(terminal.producer_refused_paths, [".", "planted", "planted/x"]);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("a merge rollback failure does not surface unrestored paths as producer refusals", async () => {
+  const { root, taskRel } = await autoRepo();
+  await writeBridgeConfig(root);
+  const outcome = await runReviewThenSuccessor(
+    { repo: root, task: taskRel },
+    testDeps({
+      clock: testClock(PLAN_ID),
+      createAdapter: () => mutatingProducer({ result: () => passResult("plan") }, async (workspace) => {
+        await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "src", "a.ts"), "new\n", "utf8");
+      }),
+      applyProducerMergeDeps: {
+        beforeEntry: (_entry, index) => {
+          if (index === 1) throw new Error("injected apply failure");
+        },
+        rollbackEntry: () => {
+          throw new Error("injected rollback failure");
+        },
+      },
+    }),
+  );
+  assert.equal(outcome.kind, "transition");
+  assert.equal(outcome.transition?.reason_code, "runtime_state_violation");
+  assert.equal(outcome.transition?.producer_refused_paths, null);
+  assert.equal(outcome.transition?.producer_diagnostic, null);
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.equal(terminal.producer_refused_paths, null);
+  assert.equal(terminal.producer_diagnostic, null);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -1537,6 +1656,7 @@ test("a real chflags-locked .spartan-bridge is released before the runtime persi
   assert.equal(outcome.kind, "transition", JSON.stringify(outcome.status));
   assert.equal(outcome.status, null);
   assert.equal(outcome.transition?.reason_code, "write_scope_violation");
+  assert.deepEqual(outcome.transition?.producer_refused_paths, ["secret.txt"]);
   const events = (
     await fs.readFile(
       path.join(root, ".spartan-bridge", "transitions", outcome.transition!.transition_id, "events.jsonl"),
@@ -1548,6 +1668,8 @@ test("a real chflags-locked .spartan-bridge is released before the runtime persi
     .map((line) => JSON.parse(line) as { type: string; state: string });
   assert.equal(events.at(-1)?.type, "terminal_stop");
   assert.equal(events.at(-1)?.state, "stopped");
+  const terminal = await readTerminalTransitionEvent(root, outcome.transition!.transition_id);
+  assert.deepEqual(terminal.producer_refused_paths, ["secret.txt"]);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -1975,10 +2097,12 @@ test("a full successful producer/reviewer chain returns and persists a null prod
   assert.equal(outcome.status?.reason_code, "review_passed");
   assert.equal(outcome.transition?.state, "completed");
   assert.equal(outcome.transition?.producer_diagnostic, null);
+  assert.equal(outcome.transition?.producer_refused_paths, null);
   const events = await readAllTransitionEvents(root, outcome.transition!.transition_id);
   assert.equal(events.length > 0, true);
   for (const event of events) {
     assert.equal(event.producer_diagnostic, null, event.type);
+    assert.equal(event.producer_refused_paths, null, event.type);
   }
   await fs.rm(root, { recursive: true, force: true });
 });

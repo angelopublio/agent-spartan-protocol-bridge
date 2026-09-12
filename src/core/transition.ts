@@ -44,6 +44,7 @@ import {
 } from "./contracts.ts";
 import { rfc3339Utc } from "./contracts.ts";
 import { planTargetsUnwritablePath } from "./plan-target-scan.ts";
+import { boundProducerRefusedPaths } from "./producer-refused-paths.ts";
 import { validateProducerDeclaration, basenameTaskPath } from "./producer-declaration.ts";
 import { runReview, buildResolvedPolicy, type AppDeps, type ReviewOutcome, type ReviewProgress } from "./review.ts";
 import { policyDigest, sha256Bytes } from "./serialize.ts";
@@ -467,6 +468,7 @@ export async function continueAfterPlanReview(
       reason_code: null,
       producer_diagnostic: null,
       unwritable_plan_targets: unwritablePlanTargets.length > 0 ? unwritablePlanTargets : null,
+      producer_refused_paths: null,
       declaration_invalid_detail: null,
       current_review_run_id: null,
       linked_review_run_ids: [],
@@ -638,6 +640,7 @@ type GuardedRoundOutcome =
       reason: ReasonCode;
       diagnostic: ProducerDiagnostic | null;
       declarationInvalidDetail?: string | null;
+      refusedPaths?: readonly string[];
     };
 
 async function finishProducerRound(
@@ -668,6 +671,7 @@ async function finishProducerRound(
       outcome.diagnostic,
       null,
       outcome.declarationInvalidDetail ?? null,
+      outcome.refusedPaths ?? null,
     );
   }
   await emitTransition(input.transition, input.deps, "path_validated", "producer_finished");
@@ -836,11 +840,23 @@ async function runGuardedRound(
 
     const runtimeDiff = snapshotDiff(runtimeBefore, runtimeAfter, new Set());
     if (runtimeDiff.length > 0) {
-      return { kind: "stop", reason: "runtime_state_violation", diagnostic: null };
+      return {
+        kind: "stop",
+        reason: "runtime_state_violation",
+        diagnostic: null,
+        refusedPaths: boundProducerRefusedPaths(runtimeDiff.map((entry) => entry.path)),
+      };
     }
     const productDiff = snapshotDiff(productBefore, productAfter, new Set());
     if (productDiff.some((entry) => entry.path !== ".")) {
-      return { kind: "stop", reason: "write_scope_violation", diagnostic: null };
+      return {
+        kind: "stop",
+        reason: "write_scope_violation",
+        diagnostic: null,
+        refusedPaths: boundProducerRefusedPaths(
+          productDiff.filter((entry) => entry.path !== ".").map((entry) => entry.path),
+        ),
+      };
     }
 
     // D-072 deliberately pins the snapshot window here. A sandboxed survivor
@@ -861,20 +877,37 @@ async function runGuardedRound(
       });
       destinations = await resolveMergeDestinations({ repoRoot: input.repoRoot, captured });
     } catch (error) {
-      return { kind: "stop", reason: error instanceof ProducerMergeError ? error.reason : "write_scope_violation", diagnostic: null };
+      return {
+        kind: "stop",
+        reason: error instanceof ProducerMergeError ? error.reason : "write_scope_violation",
+        diagnostic: null,
+        ...(error instanceof ProducerMergeError && error.refusedPaths.length > 0
+          ? { refusedPaths: error.refusedPaths }
+          : {}),
+      };
     }
 
     try {
       await input.adapter.releaseProducerIsolation();
       isolationReleased = true;
-      await applyProducerMerge({
-        repoRoot: input.repoRoot,
-        captured,
-        destinations,
-        runId: executionId,
-      });
+      await applyProducerMerge(
+        {
+          repoRoot: input.repoRoot,
+          captured,
+          destinations,
+          runId: executionId,
+        },
+        input.deps.applyProducerMergeDeps,
+      );
     } catch (error) {
-      return { kind: "stop", reason: error instanceof ProducerMergeError ? error.reason : "write_scope_violation", diagnostic: null };
+      return {
+        kind: "stop",
+        reason: error instanceof ProducerMergeError ? error.reason : "write_scope_violation",
+        diagnostic: null,
+        ...(error instanceof ProducerMergeError && error.refusedPaths.length > 0
+          ? { refusedPaths: error.refusedPaths }
+          : {}),
+      };
     }
 
     let taskBytes: Uint8Array;
@@ -1128,6 +1161,7 @@ function emptyTransition(
   createdAt: string,
   unwritablePlanTargets: string[] | null = null,
   declarationInvalidDetail: string | null = null,
+  producerRefusedPaths: string[] | null = null,
 ): TransitionStatusDocument {
   return {
     schema_version: SCHEMA_VERSION,
@@ -1144,6 +1178,7 @@ function emptyTransition(
     reason_code: null,
     producer_diagnostic: null,
     unwritable_plan_targets: unwritablePlanTargets,
+    producer_refused_paths: producerRefusedPaths,
     declaration_invalid_detail: declarationInvalidDetail,
     current_review_run_id: null,
     linked_review_run_ids: [],
@@ -1160,12 +1195,14 @@ async function stopTransition(
   diagnostic: ProducerDiagnostic | null = null,
   unwritablePlanTargets: string[] | null = null,
   declarationInvalidDetail: string | null = null,
+  producerRefusedPaths: readonly string[] | null = null,
 ): Promise<SuccessorOutcome> {
   transition.status = {
     ...transition.status,
     reason_code: reason,
     producer_diagnostic: diagnostic,
     unwritable_plan_targets: unwritablePlanTargets ?? transition.status.unwritable_plan_targets,
+    producer_refused_paths: producerRefusedPaths === null ? null : [...producerRefusedPaths],
     declaration_invalid_detail: declarationInvalidDetail,
     state,
   };
@@ -1206,6 +1243,7 @@ async function emitTransition(
     reason_code: transition.status.reason_code,
     producer_diagnostic: transition.status.producer_diagnostic,
     unwritable_plan_targets: transition.status.unwritable_plan_targets,
+    producer_refused_paths: transition.status.producer_refused_paths,
     declaration_invalid_detail: transition.status.declaration_invalid_detail,
     review_run_id: reviewRunId,
   });
