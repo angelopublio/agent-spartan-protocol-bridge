@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +38,7 @@ import {
   HookThrowAdapter,
   makeRepo,
   passResult,
+  spawnCliChild,
   testClock,
   testDeps,
   validAgentsMd,
@@ -75,8 +75,8 @@ async function runCli(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], {
-      env: { ...env, NO_COLOR: "1", TZ: PINNED_TZ },
+    const child = spawnCliChild(["--import", "tsx", cli, ...args], {
+      env: { ...env, TZ: PINNED_TZ },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -93,6 +93,13 @@ async function runCli(
     });
   });
 }
+
+test("CLI child color environment ignores inherited FORCE_COLOR", async () => {
+  const result = await runCli(["start"], { ...process.env, FORCE_COLOR: "1" });
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "error: unknown command 'start'\n");
+});
 
 test("wait prints phase and phase_since on the running line", async () => {
   const { root: r0 } = await makeRepo();
@@ -379,8 +386,8 @@ test("CLI runs when invoked through a bin symlink", async () => {
   await fs.symlink(cli, link);
   assert.notEqual(path.resolve(link), await fs.realpath(link));
   const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", link, "--help"], {
-      env: { ...process.env, NO_COLOR: "1", TZ: PINNED_TZ },
+    const child = spawnCliChild(["--import", "tsx", link, "--help"], {
+      env: { ...process.env, TZ: PINNED_TZ },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -656,8 +663,8 @@ async function runCliWithModule(
     "utf8",
   );
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", harness, moduleFile, ...args], {
-      env: { ...env, NO_COLOR: "1", TZ: PINNED_TZ },
+    const child = spawnCliChild(["--import", "tsx", harness, moduleFile, ...args], {
+      env: { ...env, TZ: PINNED_TZ },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

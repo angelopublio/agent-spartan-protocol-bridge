@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -21,6 +20,7 @@ import {
   makeRepo,
   passResult,
   snapshotFiles,
+  spawnCliChild,
   testClock,
   testDeps,
   validAgentsMd,
@@ -197,9 +197,9 @@ async function mcpSources(): Promise<string> {
 async function spawnProcess(
   args: string[],
   options?: { env?: NodeJS.ProcessEnv; cwd?: string; stdin?: "pipe" | "ignore" },
-): Promise<{ child: ReturnType<typeof spawn>; stdout: () => string; stderr: () => string; wait: () => Promise<number> }> {
-  const child = spawn(process.execPath, ["--import", tsxLoader, cli, ...args], {
-    env: { ...process.env, NO_COLOR: "1", ...(options?.env ?? {}) },
+): Promise<{ child: ReturnType<typeof spawnCliChild>; stdout: () => string; stderr: () => string; wait: () => Promise<number> }> {
+  const child = spawnCliChild(["--import", tsxLoader, cli, ...args], {
+    env: { ...process.env, ...(options?.env ?? {}) },
     cwd: options?.cwd,
     stdio: [options?.stdin ?? "pipe", "pipe", "pipe"],
   });
@@ -218,6 +218,16 @@ async function spawnProcess(
     });
   return { child, stdout: () => stdout, stderr: () => stderr, wait };
 }
+
+test("mcp-stdio usage errors ignore inherited FORCE_COLOR", async () => {
+  const { child, stdout, stderr, wait } = await spawnProcess(["mcp-stdio", "--task", "x"], {
+    env: { FORCE_COLOR: "1" },
+  });
+  child.stdin?.end();
+  assert.equal(await wait(), 2);
+  assert.equal(stdout(), "");
+  assert.match(stderr(), /^error: /);
+});
 
 async function withXdgRegistry(): Promise<{ env: NodeJS.ProcessEnv; cleanup: () => Promise<void> }> {
   const xdg = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-xdg-"));

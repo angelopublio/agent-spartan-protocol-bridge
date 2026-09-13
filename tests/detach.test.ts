@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +13,7 @@ import {
   waitForRun,
 } from "../src/cli/detach.ts";
 import { FakeAdapter } from "../src/adapters/fake.ts";
-import { DEFAULT_REVIEW_SECTION, makeRepo, passResult, readyImplementationTask, testDeps, validAgentsMd, validTaskMd, writeBridgeConfig, VALID_REGISTRY } from "./helpers.ts";
+import { DEFAULT_REVIEW_SECTION, makeRepo, passResult, readyImplementationTask, spawnCliChild, testDeps, validAgentsMd, validTaskMd, writeBridgeConfig, VALID_REGISTRY } from "./helpers.ts";
 import { sha256Bytes } from "../src/core/serialize.ts";
 import { acquireWriterLock } from "../src/runtime/lock.ts";
 import { SCHEMA_VERSION } from "../src/core/contracts.ts";
@@ -59,8 +58,8 @@ async function runCli(
   env: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", cli, ...args], {
-      env: { ...env, NO_COLOR: "1" },
+    const child = spawnCliChild(["--import", "tsx", cli, ...args], {
+      env: { ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

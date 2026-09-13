@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,18 @@ import {
 import { createMemoryRegistrySource } from "../src/composition.ts";
 import { readEventsParsed, readStatus } from "../src/runtime/store.ts";
 import type { EventDocument, ReasonCode, RunState, StatusDocument } from "../src/core/contracts.ts";
+
+export function cliChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { FORCE_COLOR: _forceColor, ...childEnv } = env;
+  return { ...childEnv, NO_COLOR: "1" };
+}
+
+export function spawnCliChild(args: readonly string[], options: SpawnOptions = {}): ChildProcess {
+  return spawn(process.execPath, args, {
+    ...options,
+    env: cliChildEnv(options.env ?? process.env),
+  });
+}
 
 // Cursor's real capabilities report `structured_output: false`, so `runReview`
 // refuses a Cursor reviewer dispatch (D-043 / reviewer_output_unconstrained).
