@@ -2,7 +2,7 @@
 protocol: "1.1.0" # x-release-please-version
 id: a-write-scope-violation-names-no-path
 created_at: 2026-09-03
-status: active
+status: completed
 phase: complete
 task_type: implementation
 risk: material
@@ -448,6 +448,10 @@ caught.
   to remove the serializer/workspace import cycle. Recorded the accepted
   runtime-root and marker ambiguities in D-077 and corrected stale artifact
   criterion references. No review finding remains unaddressed in the worktree.
+- 2026-09-13 (human-operator, Claude Code, claude-opus-5, Anthropic; close-out
+  on the owner's instruction): confirmed the implementation landed in `0fc8ce7`
+  with both reviews `APPROVED`, observed the full suite in the outer checkout
+  (AC-27), found no open decision or residual, and set `status: completed`.
 
 ## Evidence
 
@@ -553,6 +557,10 @@ caught.
   - Direct `validateProducerDeclaration` against this task artifact returned
     `{ "ok": true }`, pinning the reviewing frontmatter and retractable HX-005
     implementation-review envelope.
+- Close-out verification, 2026-09-13, in the outer checkout with Git available:
+  `NO_COLOR=1 npm test` at a staged tree containing `0fc8ce7` gives 618 tests,
+  618 pass, 0 fail, and `npm run typecheck` exits 0. The 29 in-sandbox failures
+  above do not reproduce, which settles AC-27.
 
 ## Review
 
@@ -577,14 +585,14 @@ Bridge run: run_id=run-21c16cea-51ae-4acb-bc9f-0cb4bab98cd4 execution_id=exec-5a
 
 ## Blockers
 
-None. The full-suite nonzero exit is the unchanged enclosing-sandbox limitation
-recorded above; all changed behavior is covered by the clean focused suite.
+None. The in-sandbox full-suite failures recorded above were the producer
+sandbox denying Git; the outer checkout's full suite is clean (Evidence).
 
 ## Next Action
 
-Auto-chain complete: implementation review passed (Bridge run run_id=run-21c16cea-51ae-4acb-bc9f-0cb4bab98cd4).
-Review the worktree diff in the authorized implementation write scope, commit
-when satisfied, then set this task to status: completed.
+None. Closed by the human operator on 2026-09-13 after the implementation
+review passed and the work landed in `0fc8ce7`.
+
 ## Next Handoff
 
 No outstanding handoff. The proposed review was consumed.

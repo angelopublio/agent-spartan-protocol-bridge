@@ -2,7 +2,7 @@
 protocol: "1.1.0" # x-release-please-version
 id: the-tilde-rule-admits-one-fixture-token
 created_at: 2026-09-12
-status: active
+status: completed
 phase: complete
 task_type: implementation
 risk: material
@@ -210,6 +210,10 @@ Derived from D1–D5.
   residue, added all passing and retained offending cases from D1–D2, documented
   the limits in the test preamble, and recorded D-079. No out-of-scope product
   file was edited.
+- 2026-09-13 (human-operator, Claude Code, claude-opus-5, Anthropic; close-out
+  on the owner's instruction): checked the landed diff against every acceptance
+  criterion, observed the staged full suite in the outer checkout, found no open
+  decision or residual, and set `status: completed`.
 
 ## Evidence
 
@@ -255,6 +259,10 @@ Derived from D1–D5.
 - `validateProducerDeclaration` on this task returns `{ "ok": true }`;
   `checkArtifactWriteShape(task, "implementation")` returns `{ "ok": true }`
   and `describeNextHandoffRejection(task, "implementation")` returns `null`.
+- Outer checkout, 2026-09-13, implementation staged with `git add -u`:
+  `NO_COLOR=1 npm test` gives 618 tests, 618 pass, 0 fail, and
+  `npm run typecheck` exits 0 (acceptance criterion 6). The work landed in
+  `c04c4f1`.
 
 ## Review
 
@@ -279,18 +287,14 @@ Bridge run: run_id=run-81f1de08-95e8-4179-84de-06ea39358751 execution_id=exec-6b
 
 ## Blockers
 
-None in the implementation. This isolated producer workspace cannot stage or
-run the index-backed part of acceptance criterion 6 because it deliberately
-contains no `.git` and its sandbox denies Git's `/dev/null` access; the focused
-retained cases, the non-Git suite partition, typecheck, and the read-only
-filesystem scan are clean. The outer repository checkout must supply the final
-staged `npm test` observation.
+None. The index-backed half of acceptance criterion 6, which the producer
+workspace could not run, was observed in the outer checkout (Evidence).
 
 ## Next Action
 
-Auto-chain complete: implementation review passed (Bridge run run_id=run-81f1de08-95e8-4179-84de-06ea39358751).
-Review the worktree diff in the authorized implementation write scope, commit
-when satisfied, then set this task to status: completed.
+None. Closed by the human operator on 2026-09-13 after the implementation
+review passed and the work landed in `c04c4f1`.
+
 ## Next Handoff
 
 No outstanding handoff. The proposed review was consumed.
