@@ -1599,3 +1599,23 @@ writing invocation. Persisted status and event records separately attribute run
 creation and later event appenders. When `PATH` resolves no runtime, the skill's
 pre-existing workspace-local `dist/cli/main.js` fallback remains the bounded
 exception; it displaces no installed runtime because none is resolvable.
+
+## D-079 — A tilde exception names one placeholder segment (task 0082)
+
+**Decision:** On 2026-09-13, the private-identity hygiene check replaced its
+single pinned tilde token with a closed placeholder-segment vocabulary: `src`
+and `build`. A non-dotfile tilde token is admitted only when one of those words
+is the entire segment between the opening and trailing slash, optionally
+followed by exactly the two source characters of a newline escape. The existing
+dotfile rule is unchanged.
+
+**Rationale:** Both config-parser fixtures express the same safe class even
+though one carries escape residue in source. Classifying the segment separately
+from that source spelling keeps the exception maintainable without widening it
+to an arbitrary one-segment name or to paths nested below an admitted segment.
+
+**Consequence:** Generic standalone fixture directories do not make the
+repository scan fail, including when one is someone's real directory, because
+that identifies a working habit rather than a person or project. Named working
+directories, nested paths, unknown segments, and tokens that continue past the
+one permitted escape residue remain findings.

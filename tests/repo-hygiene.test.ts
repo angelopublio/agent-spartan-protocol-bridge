@@ -21,6 +21,13 @@ import test from "node:test";
 // alias, so the alternatives were a loophole or a false positive on every
 // literal, and neither is worth claiming coverage for.
 //
+// The tilde exception is one lone placeholder segment, optionally followed by
+// the two source characters of a `\n` escape. Admitting a placeholder merely as
+// the first segment would let a private working-directory name follow it. A
+// generic directory word standing alone may also be someone's real directory;
+// that reveals a habit rather than a private identity, which is the boundary
+// this assertion enforces.
+//
 // The home, tilde and alias patterns capture to a real delimiter — whitespace,
 // a quote or a backtick — and judge afterwards, because a capture narrowed to an
 // admissible alphabet stops at the first character outside it, which both misses
@@ -40,11 +47,9 @@ import test from "node:test";
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
 const PLACEHOLDER_HOME_USERS = new Set(["example", "you", "real", "someone", "user", "x", "<user>"]);
+const PLACEHOLDER_TILDE_SEGMENTS = new Set(["src", "build"]);
 const ALLOWED_ADDRESSES = new Set(["t@t.invalid"]);
 const PUBLIC_CLIENT_CONTEXTS = new Set(["personal", "default"]);
-// The single tilde exception is the negative fixture asserting that a tilde
-// scope entry is refused. Compared against the whole captured token.
-const TILDE_FIXTURE = "~/src/";
 
 type Entry = { readonly index: number; readonly blob: string; readonly file: string; readonly text: string };
 
@@ -121,7 +126,13 @@ export function homePathOffends(subject: string): boolean {
 export function tildePathOffends(subject: string): boolean {
   for (const match of subject.matchAll(/~\/[^\s"'`]*/g)) {
     const found = match[0];
-    if (found === TILDE_FIXTURE) {
+    const placeholder = found.endsWith("\\n") ? found.slice(0, -2) : found;
+    const placeholderSegments = placeholder.slice(2).split("/");
+    if (
+      placeholderSegments.length === 2 &&
+      placeholderSegments[1] === "" &&
+      PLACEHOLDER_TILDE_SEGMENTS.has(placeholderSegments[0] ?? "")
+    ) {
       continue;
     }
     const segments = found.slice(2).split("/");
@@ -232,11 +243,17 @@ const HOME_CASES: readonly { readonly subject: string; readonly offends: boolean
 
 const TILDE_CASES: readonly { readonly subject: string; readonly offends: boolean }[] = [
   { subject: "~/.config/git/ignore", offends: false },
-  { subject: TILDE_FIXTURE, offends: false },
+  { subject: "~/src/", offends: false },
+  { subject: "~/build/", offends: false },
+  { subject: String.raw`~/build/\n`, offends: false },
   { subject: `~${SLASH}Documents/x`, offends: true },
   { subject: `~${SLASH}src/,x`, offends: true },
   { subject: `~${SLASH}src/)x`, offends: true },
   { subject: `~${SLASH}.config/../x`, offends: true },
+  { subject: `~${SLASH}Documents/DEV/repository-name`, offends: true },
+  { subject: `~${SLASH}src/x`, offends: true },
+  { subject: `~${SLASH}notaplaceholder/`, offends: true },
+  { subject: `~${SLASH}build/\\nx`, offends: true },
 ];
 
 const ADDRESS_CASES: readonly { readonly subject: string; readonly offends: boolean }[] = [

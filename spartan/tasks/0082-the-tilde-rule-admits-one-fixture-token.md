@@ -3,14 +3,14 @@ protocol: "1.1.0" # x-release-please-version
 id: the-tilde-rule-admits-one-fixture-token
 created_at: 2026-09-12
 status: active
-phase: planning
-task_type: planning
+phase: complete
+task_type: implementation
 risk: material
-current_role: planner
-next_role: reviewer
+current_role: human-operator
+next_role: human-operator
 updated_at: 2026-09-13
-handoff_id: HX-002
-next_handoff_id: HX-003
+handoff_id: HX-004
+next_handoff_id: none
 ---
 
 # The private-identity tilde rule admits one fixture token and fails the next
@@ -204,6 +204,12 @@ Derived from D1–D5.
   identical clause to `tests/agents.test.ts:630` on the owner's instruction,
   removed `AGENTS.md` from the implementation scope and declared no human
   implementer.
+- 2026-09-13 (implementer, Codex, gpt-5.6-sol, OpenAI; approved plan-review run
+  `run-8c4e0d3f-cd34-42e4-bc87-f21946e03c2c`): replaced the pinned token with
+  the exact `src` / `build` placeholder-segment class and optional source escape
+  residue, added all passing and retained offending cases from D1–D2, documented
+  the limits in the test preamble, and recorded D-079. No out-of-scope product
+  file was edited.
 
 ## Evidence
 
@@ -226,38 +232,65 @@ Derived from D1–D5.
 - `spartan-bridge doctor`: `reviewer.plan` is available through
   `codex-plan-reviewer-v1`. `spartan-bridge policy --role planner`: `strict`,
   `claude-opus-5`, and the session matched.
+- Implementation checks, 2026-09-13: `npm run typecheck` exited 0.
+  `node --import tsx --test tests/repo-hygiene.test.ts` ran eight tests: all four
+  retained-case tables passed, including the expanded tilde table; its four
+  index-backed scan tests failed only at `git ls-files` status 128 because the
+  isolated producer workspace has no `.git`.
+- `npm test` enumerated 618 tests: 576 pass, 29 fail and 13 sandbox skips. Every
+  failure is in `tests/implementation-review.test.ts`,
+  `tests/repo-hygiene.test.ts`, `tests/task-status.test.ts`, or
+  `tests/workspace.test.ts`, and every one reports Git failing to initialize or
+  list files because the enclosing sandbox denies `/dev/null` or because this
+  producer copy omits `.git`. Excluding exactly those four Git-dependent files
+  with `find tests -maxdepth 1 -name '*.test.ts' -print | sort | grep -Ev
+  'tests/(implementation-review|repo-hygiene|task-status|workspace)\.test\.ts$'`
+  and passing that list to `node --import tsx --test` gives 548 tests, 537 pass,
+  0 fail and 11 expected sandbox skips.
+- A matcher-equivalent read-only scan of all 199 files present under the
+  producer snapshot's repository scopes reports zero tilde offenders. A direct
+  extraction comparison of the `AGENTS.md` private-identity bullet with
+  `ARTIFACT_AUTHORING_PRIVATE_IDENTITY_RULE` reports
+  `private-identity rule mirrors: true`.
+- `validateProducerDeclaration` on this task returns `{ "ok": true }`;
+  `checkArtifactWriteShape(task, "implementation")` returns `{ "ok": true }`
+  and `describeNextHandoffRejection(task, "implementation")` returns `null`.
 
 ## Review
 
-Verdict: PENDING
+<!-- spartan-bridge:review:plan:begin -->
+Verdict: APPROVED
 
 Findings:
 
 - None recorded.
 
+Bridge run: run_id=run-8c4e0d3f-cd34-42e4-bc87-f21946e03c2c execution_id=exec-9db77265-ab7e-48d9-9f03-765469927621 review_kind=plan verdict=pass reason_code=review_passed host=codex launcher=codex-plan-reviewer-v1 model=gpt-5.6-sol effort=high model_observed=declared_unobserved policy_digest=sha256:c032b4cea31dd45976e0e4d6a6b689590f1f0a1a368378fd8a82e546eb9525a3 spartan-bridge version=0.1.0 commit=e6539f92be0621c770b35752d35f673f5b89e663 dirty=false built_at=2026-09-13T09:21:32.781Z task_hash=sha256:ce4a41ea321c463c8b29bce8c1c9a6dad8431e0084e9e0dec1e07e6c637477c9 agents_hash=sha256:80d5047ce326a1e3c87a0fee167512528a00f525568d8c78e8e58a2ef89f3991 timestamp=2026-09-13T18:46:34.976Z
+<!-- spartan-bridge:review:plan:end -->
+<!-- spartan-bridge:review:implementation:begin -->
+Verdict: APPROVED
+
+Findings:
+
+- None recorded.
+
+Bridge run: run_id=run-81f1de08-95e8-4179-84de-06ea39358751 execution_id=exec-6b463cc7-0b34-4862-82b5-d74115e4d300 review_kind=implementation verdict=pass reason_code=review_passed host=claude launcher=claude-plan-reviewer-v1 model=claude-opus-5 effort=high model_observed=declared_unobserved policy_digest=sha256:e363264f72a848d870898b8d1d1abe453a4f1e519f622f4415d9531d867023f6 spartan-bridge version=0.1.0 commit=e6539f92be0621c770b35752d35f673f5b89e663 dirty=false built_at=2026-09-13T09:21:32.781Z task_hash=sha256:40d25fdedf7de098a0e21d0f660e0b531f48cc3181727ec6dbfef01dbc37b463 agents_hash=sha256:80d5047ce326a1e3c87a0fee167512528a00f525568d8c78e8e58a2ef89f3991 timestamp=2026-09-13T18:57:37.385Z
+<!-- spartan-bridge:review:implementation:end -->
+
 ## Blockers
 
-None.
+None in the implementation. This isolated producer workspace cannot stage or
+run the index-backed part of acceptance criterion 6 because it deliberately
+contains no `.git` and its sandbox denies Git's `/dev/null` access; the focused
+retained cases, the non-Git suite partition, typecheck, and the read-only
+filesystem scan are clean. The outer repository checkout must supply the final
+staged `npm test` observation.
 
 ## Next Action
 
-The Bridge dispatches the plan review for D1–D5 and the criteria; on a pass the
-auto-chain implements and reviews the implementation.
-
+Auto-chain complete: implementation review passed (Bridge run run_id=run-81f1de08-95e8-4179-84de-06ea39358751).
+Review the worktree diff in the authorized implementation write scope, commit
+when satisfied, then set this task to status: completed.
 ## Next Handoff
 
-```text
-Recommended execution (human decides):
-- Host: Codex (repository binds reviewer.plan to Codex; cross-vendor from a Claude plan)
-- Model and effort: GPT-5.6 Sol, reasoning effort high (fallback GPT-5.6 Terra at high)
-- Role: reviewer
-- Handoff: HX-003
-- Permission: read-only
-- Invocation: dispatched by `spartan-bridge review` through `/spbridge`
-```
-
-```text
-Open `spartan/tasks/0082-the-tilde-rule-admits-one-fixture-token.md` (handoff HX-003).
-
-Act as reviewer. Review the revised plan as a whole, including whether D1's corrected whole-token comparison still supports the chosen rule and whether D4 may let the auto-chain implement. Return exactly one APPROVED, CHANGES_REQUESTED, or BLOCKED verdict with findings, evidence, and the host, model, effort, and vendor you actually ran. Change no repository file. Run only checks that write nothing. A write failure from a check you could not run is not a product defect.
-```
+No outstanding handoff. The proposed review was consumed.
