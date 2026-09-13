@@ -2,15 +2,15 @@
 protocol: "1.1.0" # x-release-please-version
 id: consumer-repositories-run-a-pinned-runtime
 created_at: 2026-09-12
-status: active
-phase: implementing
+status: completed
+phase: complete
 task_type: implementation
 risk: material
 current_role: human-operator
-next_role: implementer
+next_role: none
 updated_at: 2026-09-13
-handoff_id: HX-008
-next_handoff_id: HX-009
+handoff_id: HX-011
+next_handoff_id: none
 ---
 
 # Consumer repositories run a pinned runtime, and every run names its build
@@ -208,15 +208,16 @@ guard logic:
 
   The promotion procedure runs from this checkout, with the tarball written
   outside the repository. Every command below is run by the operator, one per
-  block, in the order given. Seven steps: six commands and one decision.
+  block, in the order given. Eight steps: seven commands and one decision.
 
   Steps 1, 2 and 3 are prerequisites of everything that follows. Step 4 is the
-  human decision, not a command. Steps 5, 6 and 7 perform and confirm the
-  promotion.
+  human decision, not a command. Steps 5 and 6 pack and name the tarball, and
+  steps 7 and 8 install and verify it.
 
-  Working directory is this checkout's root for steps 1, 2, 3 and 5 — the four
-  that read the repository. Step 6 may run from any directory, and step 7 runs
-  wherever the operator wants to ask which build `PATH` resolves.
+  Working directory is this checkout's root for steps 1, 2, 3, 5 and 6 — the
+  five that read or write inside the repository or beside it. Step 7 may run
+  from any directory, and step 8 runs wherever the operator wants to ask which
+  build `PATH` resolves.
 
   Step 1 installs dependencies from the lockfile:
 
@@ -258,23 +259,32 @@ guard logic:
   failures, and the documentation says so rather than leaving "one failure is
   fine" standing forever.
 
-  Step 5 packs, writing the tarball to a directory outside the repository:
+  Step 5 packs, writing the tarball to a durable directory outside the
+  repository:
 
   ```text
   ######## RUN ON TERMINAL ################
-  npm pack --pack-destination <a directory outside the repository>
+  npm pack --pack-destination <a durable directory outside the repository>
   ######## END OF RUN ON TERMINAL ########
   ```
 
-  Step 6 installs that tarball globally:
+  Step 6 names that tarball after the build it carries, in the same directory:
 
   ```text
   ######## RUN ON TERMINAL ################
-  npm -g install <the tarball written by step 5>
+  mv <that directory>/spartan-bridge-<version>.tgz <that directory>/spartan-bridge-<version>-<commit>-<built_at digits>[-dirty].tgz
   ######## END OF RUN ON TERMINAL ########
   ```
 
-  Step 7 confirms the promotion landed:
+  Step 7 installs the renamed tarball globally:
+
+  ```text
+  ######## RUN ON TERMINAL ################
+  npm -g install <the tarball step 6 named>
+  ######## END OF RUN ON TERMINAL ########
+  ```
+
+  Step 8 confirms the promotion landed:
 
   ```text
   ######## RUN ON TERMINAL ################
@@ -282,7 +292,47 @@ guard logic:
   ######## END OF RUN ON TERMINAL ########
   ```
 
-  **Why step 7 is not decoration.** The tarball's file name carries a version
+  **Where the tarball goes, and why it is renamed.** Step 5 writes to a durable
+  operator-owned directory outside the repository, not a temporary one, so an
+  earlier promotion remains available. `npm pack` names the file from the
+  package version, which does not change between promotions, so successive packs
+  would overwrite one another. The tarball is therefore renamed using the
+  `commit` and `built_at` that `dist/build-info.json` already records: unique
+  per build including two dirty builds at one commit, and checkable against the
+  tarball's own contents afterwards.
+
+  The rename is step 6, an ordered command of its own, not a note beside step 5.
+  Its form is
+  `spartan-bridge-<version>-<commit>-<built_at digits>[-dirty].tgz`, where
+  `<commit>` is the stamp's full lowercase hexadecimal commit or the literal
+  `nocommit` when the stamp recorded `null`, `<built_at digits>` is the stamp's
+  `built_at` with every non-digit removed and **no truncation**, so the
+  fractional seconds the stamp records are kept, and the `-dirty` suffix is
+  present exactly when the stamp recorded `dirty: true`. Every field comes from
+  `dist/build-info.json`, so the name is derivable from the tarball and
+  checkable against it.
+
+  Nothing is truncated because step 6 is an `mv`, which overwrites silently. A
+  name that can collide is a rollback archive that can lose the build it was
+  kept for, so the name carries the whole of `built_at`. Two tarballs can then
+  share a name only when `commit`, `dirty` and `built_at` are all identical —
+  at which point the stamp cannot tell those builds apart either, and the name
+  is exactly as unique as the build identity the rest of this task relies on.
+  An earlier draft truncated to the second and conceded a sub-second collision;
+  that concession is withdrawn rather than defended. A
+  package version bump would not serve this: it is not bumped between the
+  promotions this procedure is most used for, and the field the run records
+  carry for rollback is `commit`, not a version.
+
+  **Rolling back is promoting something else.** The global slot holds one
+  package, so there is no demotion. Reinstalling a kept tarball restores an
+  earlier build without a rebuild or a test run, and `runtime_build` in the
+  `status.json` of a run that behaved correctly names the `commit` and
+  `built_at` to look for — the two fields the kept tarballs are named by.
+  `docs/RUNTIME-PROMOTION.md` carries both, and reversal to the development link
+  stays documented beside them.
+
+  **Why step 8 is not decoration.** The tarball's file name carries a version
   that does not change between promotions. `--version` prints `commit` and
   `built_at` as well, so it is what distinguishes the build just packed from the
   one already installed. A `built_at` older than step 2's build means the
@@ -357,16 +407,31 @@ guard logic:
   install in the global slot, so `PATH` resolves on any machine where the
   operator has promoted once.
 
-  **How a Bridge round exercises the development build.** The operator selects
-  it where the operator already has authority: the environment of one shell.
-  `docs/RUNTIME-PROMOTION.md` documents a development shell that prepends to
-  `PATH` a directory the operator owns, outside every repository, holding a
-  `spartan-bridge` shim that execs `node <checkout>/dist/cli/main.js`. Inside
-  that shell a round runs the development build and the stale-build guard
-  measures the checkout under review, which is the case the guard is for. Every
-  other shell — and therefore every other repository, and this one by default —
-  resolves `spartan-bridge` to the pinned install. Closing the shell reverses
-  it, and no repository file records it.
+  **How a Bridge round exercises the development build: by promoting it.**
+  There is one runtime on the machine at a time and, wherever `PATH` resolves
+  `spartan-bridge`, every round uses it, including a round on this checkout.
+  The missing-from-`PATH` fallback above is the one case that is not that
+  runtime, and it is reached only when no pinned runtime exists to use. A build that must be exercised is promoted
+  first, which makes it that one runtime until the next promotion.
+
+  An operator-owned `PATH` shim was documented and then withdrawn, after it was
+  built and tried. Two things decided it. A shim only takes effect in the shell
+  that sets it, and a coding-agent session inherits the environment of the shell
+  that launched it — so the selection had to happen before the session started,
+  in the right order, or it silently did nothing. And a per-shell selection that
+  survives that ordering constraint has to live in the operator's shell profile,
+  where it becomes the default for every process entering the directory,
+  including the rounds that should be running the stable runtime. Promotion has
+  neither problem: it is one act, it applies everywhere at once, and it is
+  visible.
+
+  The cost is stated rather than hidden: promoting a development build gives it
+  to every repository, because there is only one slot. That is the same
+  mechanism the Context describes as worse than the block — with the difference
+  that it is now a deliberate act that every run record and terminal opening
+  line names, instead of a symlink propagating an edit the moment a file is
+  saved. Rolling back is promoting a kept tarball, which
+  `docs/RUNTIME-PROMOTION.md` documents.
 
   **What this changes, completely.** One thing changes: which build the global
   slot holds, because D1 replaces the `npm link` symlink with a pinned tarball
@@ -374,13 +439,14 @@ guard logic:
   sentence, `tests/spbridge-skill.test.ts`, the stale-build guard, and the fact
   that a round's runtime is chosen before any repository content is read.
 
-  **The residual, and why D3 is in the same task.** The operator can forget to
-  open the development shell, and then a round in this checkout exercises the
-  pinned build. Nothing errors: the pinned install carries no `src/`, so the
-  guard correctly fails open. That is the reason the build identifier is not a
-  separate task — `spartan-bridge --version`, the `doctor` `runtime:` line, and
-  the `runtime_build` on every run record are what make the mistake visible
-  after the fact.
+  **The residual, and why D3 is in the same task.** A round can run against a
+  build that is not the one intended — the promotion was not made, or was made
+  from the wrong tree. Nothing errors: the pinned install carries no `src/`, so
+  the guard correctly fails open. That is the reason the build identifier is not
+  a separate task — `spartan-bridge --version`, the `doctor` `runtime:` line,
+  the review's terminal opening line, and the `runtime_build` on every run
+  record are what make it visible, the opening line before the round proceeds
+  rather than after.
 
   **Rejected: a workspace-declared predicate.** Cycles 2 and 3 developed the
   rule that a workspace whose `package.json` `name` is `spartan-bridge` and
@@ -417,7 +483,7 @@ guard logic:
   otherwise refreshes the stat cache in `.git/index` and may take
   `.git/index.lock`, which is a write. That matters beyond tidiness: a producer
   round's write scope excludes `.git`, and the plan requires the implementer to
-  run `npm run build` (C33), so without this the build the implementer must run
+  run `npm run build` (C34), so without this the build the implementer must run
   would itself write a path its scope refuses. The variable is the documented
   way to ask git for a read that takes no lock, it is set per invocation rather
   than exported, and it does not change either value recorded.
@@ -605,101 +671,113 @@ guard logic:
   any other failure stops the promotion, and states that the accepted baseline
   becomes zero once the task tracking it lands. A test asserts the gate sentence
   is present and sits between those two steps.
-- **C6 (D1).** Every command in that document the operator runs — `npm ci` and
+- **C6 (D1).** `docs/RUNTIME-PROMOTION.md` presents the promotion as eight
+  ordered steps — seven commands and one decision — with the rename as its own
+  step between the pack and the install, and states the filename form
+  `spartan-bridge-<version>-<commit>-<built_at digits>[-dirty].tgz` together with
+  how each field is taken from `dist/build-info.json`: the full lowercase commit
+  or `nocommit`, every digit of `built_at` with no truncation, and the `-dirty`
+suffix exactly when the stamp recorded `dirty: true`. The document states that
+  no field is truncated and why, given that step 6 overwrites. Both the document
+  and the artifact's own D1 sequence present those eight ordered steps as seven
+  marked command blocks and one decision carrying no block, since a marked block
+  holds exactly one command. A test pins the ordered command list and the
+  filename form.
+- **C7 (D1).** Every command in that document the operator runs — `npm ci` and
   `npm run build` separately among them — stands alone between
   `RUN ON TERMINAL` markers, with its order and prerequisites explained before
   it, and the sequence's final step is `spartan-bridge --version` with the
   stated check that a `built_at` older than the build just packed means the
   promotion did not land. A test asserts that the document contains no marked
   block holding more than one command.
-- **C7 (D1).** `README.md` links `docs/RUNTIME-PROMOTION.md` and no longer
+- **C8 (D1).** `README.md` links `docs/RUNTIME-PROMOTION.md` and no longer
   presents `npm link` as the way a repository installs the runtime.
-- **C8 (D2).** `agent-skill/skills/spbridge/SKILL.md` is byte-identical to
+- **C9 (D2).** `agent-skill/skills/spbridge/SKILL.md` is byte-identical to
   `main`, and `tests/spbridge-skill.test.ts` is unmodified and passes.
-- **C9 (D2).** While `PATH` resolves `spartan-bridge`, nothing this task adds or
+- **C10 (D2).** While `PATH` resolves `spartan-bridge`, nothing this task adds or
   changes lets repository content displace it: the diff introduces no read of a
   workspace `package.json` `name`, workspace `dist/cli/main.js`, or other
   repository-controlled value for that purpose, and no new path by which a
   workspace-local file is reached while `PATH` resolves.
-- **C10 (D2).** The pre-existing last-resort fallback is preserved and
+- **C11 (D2).** The pre-existing last-resort fallback is preserved and
   unwidened: `SKILL.md` still reaches a workspace-local `dist/cli/main.js` only
   on the condition that `spartan-bridge` is missing from `PATH`, and that
   condition is byte-identical to `main`. The plan states this as a bounded
   exception rather than as an invariant it does not have.
-- **C11 (D2).** `docs/RUNTIME-PROMOTION.md` documents the development shell — an
-  operator-owned directory outside every repository, prepended to `PATH`,
-  holding a `spartan-bridge` shim that execs `node <checkout>/dist/cli/main.js`
-  — with a placeholder home path, and states that every other shell resolves
-  `spartan-bridge` to the pinned install and that closing the shell reverses the
-  selection.
-- **C12 (D2).** `docs/RUNTIME-PROMOTION.md` states the residual: a round started
-  outside the development shell exercises the pinned build and nothing errors,
-  and `spartan-bridge --version`, the `doctor` `runtime:` line, and the run
+- **C12 (D2).** `docs/RUNTIME-PROMOTION.md` states that wherever `PATH` resolves
+  `spartan-bridge` every round, in every repository and this checkout included,
+  uses that pinned global install; names the missing-from-`PATH` fallback as the
+  one bounded exception and why it displaces nothing; states that no repository
+  file names the binary; and states that a development build is exercised by
+  promoting it. It documents no per-shell runtime selection.
+- **C13 (D2).** That document states the residual: a round run against a build
+  that is not the one intended does not error, and `spartan-bridge --version`,
+  the `doctor` `runtime:` line, the review's terminal opening line, and the run
   record's `runtime_build` are how that is detected.
-- **C13 (D2).** `STALE_BUILD_MESSAGE`, the `isBuildStale` predicate, and the exit
+- **C14 (D2).** `STALE_BUILD_MESSAGE`, the `isBuildStale` predicate, and the exit
   codes of the `staleBuildMessage` block are byte-identical to `main`.
-- **C14 (D3).** After `npm run build`, `dist/build-info.json` exists and
+- **C15 (D3).** After `npm run build`, `dist/build-info.json` exists and
   `staleBuildMessage(<this checkout>)` is `undefined` — the stamp never lands
   under `src/`.
-- **C15 (D3).** `npm run build` succeeds with git unavailable or outside a
+- **C16 (D3).** `npm run build` succeeds with git unavailable or outside a
   checkout, recording `commit: null` and `dirty: null`.
-- **C16 (D3).** Both git invocations in `src/build/stamp.ts` carry
+- **C17 (D3).** Both git invocations in `src/build/stamp.ts` carry
   `GIT_OPTIONAL_LOCKS=0`, and running `npm run build` in a clean checkout
   changes no path under `.git` — compared by `.git/index` mtime and size
   immediately before and after the build.
-- **C17 (D3).** `StatusDocument` and `TransitionStatusDocument` carry
+- **C18 (D3).** `StatusDocument` and `TransitionStatusDocument` carry
   `runtime_build`, `EventDocument` and `TransitionEventDocument` carry
   `emitting_build`, and `src/core/contracts.ts` states at each field which build
   it names — the invocation that created the run, or the invocation that
   appended the line.
-- **C18 (D3).** A run created and completed by one invocation records the same
+- **C19 (D3).** A run created and completed by one invocation records the same
   build record in its status `runtime_build` and in every event's
   `emitting_build`; the same holds for a transition and its event log.
-- **C19 (D3).** When a later invocation resolving a different build appends
+- **C20 (D3).** When a later invocation resolving a different build appends
   events to an existing run, those events record that invocation's build in
   `emitting_build` and the run's status `runtime_build` is unchanged, so neither
   document attributes work to a build that did not do it.
-- **C20 (D3).** The run-origin build is recoverable from
+- **C21 (D3).** The run-origin build is recoverable from
   `.spartan-bridge/runs/<run-id>/events.jsonl` alone, as the `emitting_build` of
   the `run_requested` event; the `authorization` event carries it for a
   transition.
-- **C21 (D3).** `SCHEMA_VERSION` is still `2`, and a status, event, transition
+- **C22 (D3).** `SCHEMA_VERSION` is still `2`, and a status, event, transition
   status, or transition event persisted with a missing or malformed build record
   reads back as `null`.
-- **C22 (D3).** `canonicalPolicyJson` contains neither `runtime_build` nor
+- **C23 (D3).** `canonicalPolicyJson` contains neither `runtime_build` nor
   `emitting_build`, and a test pins that `policyDigest` is unchanged across two
   different build records.
-- **C23 (D3).** `spartan-bridge --version` exits 0 and prints one line;
+- **C24 (D3).** `spartan-bridge --version` exits 0 and prints one line;
   `doctor` prints the same rendering on one `runtime:` line; both state plainly
   that the build is unknown when `dist/build-info.json` is absent.
-- **C24 (D3).** The review's terminal opening line carries the build rendering
+- **C25 (D3).** The review's terminal opening line carries the build rendering
   beside `host`, `model`, `effort`, and `client-context`, and the persisted
   `Bridge run:` line carries it beside `policy_digest`; the existing fields of
   both keep their spelling and order.
-- **C25 (D3).** Each surface renders the build D3 assigns it: `--version` and
+- **C26 (D3).** Each surface renders the build D3 assigns it: `--version` and
   `doctor` the answering invocation's, the terminal opening line the dispatching
   invocation's, and the `Bridge run:` line the writing invocation's.
-- **C26 (D3).** For a run created under one build and written under a different
+- **C27 (D3).** For a run created under one build and written under a different
   one, the `Bridge run:` line renders the writing invocation's build, that run's
   status `runtime_build` still renders the creating invocation's, and the
   `task_artifact_written` event's `emitting_build` equals what the line renders.
   A single-build run is not sufficient evidence for this criterion, because the
   two values agree there by coincidence.
-- **C27 (D3).** All four surfaces render the build through the single
+- **C28 (D3).** All four surfaces render the build through the single
   `formatRuntimeBuild`, and a test pins that the four strings agree for one
   build record and that all four say plainly that the build is unknown when
   `dist/build-info.json` is absent.
-- **C28 (D3).** A run executed from source under `tsx` records `null` in its
+- **C29 (D3).** A run executed from source under `tsx` records `null` in its
   status `runtime_build` and in every event's `emitting_build`, and raises no
   error.
-- **C29 (D4).** A test asserts no `package.json` `files` entry admits `src`.
-- **C30 (D4).** A test asserts a packed tarball contains zero paths under
+- **C30 (D4).** A test asserts no `package.json` `files` entry admits `src`.
+- **C31 (D4).** A test asserts a packed tarball contains zero paths under
   `src/`, skipped with the same file-local `IN_PRODUCER_WORKSPACE` constant its
   neighbours use.
-- **C31 (D4).** The `tests/cli.test.ts` fail-open assertions are still present
+- **C32 (D4).** The `tests/cli.test.ts` fail-open assertions are still present
   and unmodified.
-- **C32 (D1-D4).** `docs/DECISIONS.md` gains one dated `D-078` entry.
-- **C33.** `npm run typecheck` and `npm run build` are clean, and `npm test`
+- **C33 (D1-D4).** `docs/DECISIONS.md` gains one dated `D-078` entry.
+- **C34.** `npm run typecheck` and `npm run build` are clean, and `npm test`
   shows no new failure against the `main` baseline.
 
 ## Work Completed
@@ -912,6 +990,120 @@ guard logic:
   new rendering surfaces behind the shared renderer, the origin/emitter split
   reaching `detach.ts` and the event readers, and the promotion documentation
   with one command per marked block and the gate before packing.
+- 2026-09-13 (human-operator, Claude Code, claude-opus-5): promoted the build
+  at commit `e6539f9` through the seven documented steps, applying the step 4
+  gate against a test run whose only failure was the `0082` baseline. `PATH` now
+  resolves to a real package directory carrying no `src/`, and
+  `spartan-bridge --version` reports that build, so the single-runtime coupling
+  this task exists to remove is removed on this machine.
+- 2026-09-13 (human-operator, Claude Code, claude-opus-5): built the
+  operator-owned `PATH` shim D2 documented, then removed it at the owner's
+  direction after testing showed it could not do what it was for: a
+  coding-agent session inherits the environment of the shell that launched it,
+  so a shim opened afterwards has no effect on that session, and the only
+  variant that survives the ordering constraint lives in the shell profile and
+  becomes the default for every process entering the directory. The owner's
+  settled policy is one runtime at a time, selected by promotion. Rewrote D2 and
+  C11-C12 to that policy, removed the per-shell section from
+  `docs/RUNTIME-PROMOTION.md`, and dropped the README sentence the
+  `README_SHIM_EXEC_BIT` finding named — it described a failure of a mechanism
+  that no longer exists. Extended D1 with a durable tarball destination, the
+  rename derived from the build stamp, and a rollback section; a package version
+  bump was considered and rejected, because it is not bumped between the
+  promotions this procedure is most used for and the field the run records carry
+  for rollback is `commit`. Left `BRIDGE_LINE_BARE_TOKENS` open with its reason:
+  making the persisted line pure `key=value` would change all four surfaces,
+  since C27 requires one renderer, and `spartan-bridge version=...` is the right
+  shape for `--version`; that is a format decision rather than a correction.
+
+  The documentation edit broke `tests/spbridge-package.test.ts`, which pins the
+  promotion procedure's commands one by one: the concrete pack destination and
+  the inserted rename displaced the pinned list. Both sides were corrected, the
+  document keeping placeholders rather than a concrete path, and the test now
+  pins seven commands including the rename while still asserting one command per
+  block, no chaining, and the gate between the tests and the packing.
+
+  This amendment was first applied without a plan review, on the reasoning that
+  the owner prefers small fixes to land directly. That reasoning was wrong: the
+  amendment changes D1, D2, C11 and C12 of an approved plan, which is not a
+  small fix. Planning is reopened here so the amendment is reviewed rather than
+  carried on the earlier approval, and the commit waits for that outcome.
+
+- 2026-09-13 (planner, Claude Code, claude-opus-5): the reopened plan review
+  returned two warnings on that amendment, both accepted
+  (`run-57623b35-3d46-45e1-a390-aba01273e941`), which is why it was reopened.
+  `FALLBACK_INVARIANT`: the new documentation section and C11 claimed every
+  round everywhere uses the pinned install, reintroducing the absolute the
+  `RUNTIME_FALLBACK` finding had already corrected one amendment earlier.
+  Narrowed both to rounds where `PATH` resolves the runtime and named the
+  fallback as the bounded exception, in the document as well as the decision.
+  `PROMOTION_RENAME`: the rename had been added as a note beside the pack step
+  while D1's introduction still counted six commands, and no criterion pinned
+  the filename. The rename is now step 6 of eight, with the exact form and each
+  field's derivation from `dist/build-info.json`, and C6 pins both. Re-derived
+  C1-C34.
+
+- 2026-09-13 (planner, Claude Code, claude-opus-5): plan-review cycle 2 returned
+  two more findings on the same amendment
+  (`run-df814fed-5c94-4409-9cdc-9cc890557cd8`), both accepted.
+  `PROMOTION_SEQUENCE` (error): the previous round added the rename to
+  `docs/RUNTIME-PROMOTION.md` and to D1's prose but never to D1's own displayed
+  sequence, which still showed six marked blocks while the prose promised eight
+  steps. The artifact now carries the rename as its own block between the pack
+  and the install, with the install and verification renumbered.
+  `PROMOTION_NAME_TIME`: the filename said `YYYYMMDDHHMM` while its derivation
+  removed only punctuation and fractional seconds, which leaves seconds, and
+  minute precision could not support the uniqueness the decision claims for two
+  dirty builds at one commit. Settled on fourteen digits to the second in the
+  decision, the document and the test, with the reason recorded: collisions
+  matter within minutes, not within one second of a `tsc` run. Re-derived C6.
+  The document test broke twice more in this round — once on the changed
+  filename and once on a reflowed line its assertion matched literally — and was
+  corrected both times rather than loosened past its purpose.
+
+- 2026-09-13 (planner, Claude Code, claude-opus-5): plan-review cycle 3 raised
+  `PROMOTION_COLLISION` (warning) and exhausted the chain
+  (`run-bcfbc016-0607-4740-b17a-6564cc1dca08`). Accepted: the previous round
+  claimed the renamed tarballs are unique and then conceded, in the next
+  sentence, that two builds within one second collide — and step 6 is an `mv`,
+  which overwrites silently, so the collision would destroy the archived build
+  the rollback depends on. Removed the truncation instead of defending the
+  concession: the name now carries every digit of `built_at`. Two tarballs can
+  share a name only when `commit`, `dirty` and `built_at` all match, and then
+  the stamp cannot distinguish the builds either, so the filename is exactly as
+  unique as the build identity. Re-derived C6, and the document, the decision
+  and the test now state one rule. This was the chain's last cycle.
+
+- 2026-09-13 (planner, Claude Code, claude-opus-5): a fresh chain's first
+  dispatch failed on `adapter_error` / `output_unparsable`
+  (`run-4eeeedd8-6051-4ac6-b396-c47175c726db`); the payload log ended in a
+  provider usage-limit message, so the reviewer never read the plan and no
+  finding was produced. Re-dispatched without `--after-run` once the limit
+  cleared, since a failed run carries no chainable verdict.
+- 2026-09-13 (planner, Claude Code, claude-opus-5): plan review
+  `run-96219508-bb69-4250-b4dd-21bcfe770821` raised `PROMOTION_BLOCK_COUNT`
+  (error). Accepted: C6 said the sequence shows "the same eight blocks" when
+  eight steps are seven commands and one decision, and the decision must carry
+  no block, because a marked block holds exactly one command. C6 now requires
+  eight ordered steps presented as seven marked command blocks and one
+  block-less decision, in the document and in D1 alike.
+- 2026-09-13 (planner, Claude Code, claude-opus-5): plan-review cycle 2 raised
+  `BLOCKER_STATE` (warning) (`run-a74eeea1-99a7-4638-9ad4-2cf1f54c766a`).
+  Accepted: Blockers still counted two machine-local steps and referred to "the
+  first" and "the second" after D2 had removed the per-shell selector, leaving
+  the operational handoff describing an action that no longer exists. Rewrote it
+  to the state that holds — the promotion has run, nothing is outstanding, later
+  promotions are routine operation — and recorded what the earlier revision had
+  named, so a reader of the history is not left wondering which step vanished.
+- 2026-09-13 (planner, Claude Code, claude-opus-5): plan-review cycle 3 raised
+  `PROMOTION_TIMESTAMP_FORM` (warning)
+  (`run-8aa04b8f-bbe8-4786-bc84-b998bf358502`) and exhausted the chain.
+  Accepted: removing the truncation had updated the derivation, the `mv`
+  command, the document and C6, but left the fixed-width `<YYYYMMDDHHMMSS>`
+  notation standing in the one line that declares the filename's form — so the
+  decision named a fourteen-digit shape while requiring a variable-length one.
+  The form is now `<built_at digits>` everywhere, which is the transformation
+  rather than a width.
 - 2026-09-13 (human-operator, Claude Code, claude-opus-5): adopted the
   implementation review recorded above and closed its one blocking finding by
   running, in this checkout and after the amended round, the checks the
@@ -945,6 +1137,35 @@ guard logic:
   builds, all four rendering surfaces, marked command shape, gate placement,
   and the final package premise. No machine-local install, commit, or Bridge
   invocation was run.
+
+- 2026-09-13 (implementer, Codex, gpt-5.6-sol): completed the implementation
+  declaration against approved plan-review run
+  `run-d35fd0e7-6cef-4c06-b4e2-4bd475323625`. Revalidated D1-D4 and corrected
+  stale documentation left by the withdrawn per-shell design: D-078 now names
+  promotion into the single global slot, the README names the development-build
+  procedure, and the promotion guide and its regression consistently install
+  the tarball named in step 6 and count all eight steps. The build stamp,
+  runtime provenance, shared rendering surfaces, package exclusions, portable
+  skill, stale-build guard, and schema version otherwise remain unchanged. No
+  machine-local install, commit, or Bridge invocation was run.
+
+- 2026-09-13 (implementer, Codex, gpt-5.6-sol): completed the correction round
+  requested by implementation-review run
+  `run-127b3f72-69d9-4e8b-a2d3-1936be3302cd`. Scoped the README's stale-build
+  workflow to the missing-from-`PATH` fallback and restored `npm link`, removed
+  the false chronological-listing claim from D1 and the promotion guide,
+  corrected D1's verification heading to step 8, and removed the contradictory
+  history sentence. No runtime code, portable skill, machine-local install,
+  commit, or Bridge invocation was changed or run.
+
+- 2026-09-13 (human-operator, Claude Code, claude-opus-5): verified the final
+  implementation round in this checkout. With FORCE_COLOR unset, npm test ran
+  613 tests with 612 passing and one failure, the 0082 tilde baseline; typecheck
+  is clean. A first reading of 11 failures came from FORCE_COLOR=3 in the
+  session: the CLI tests spawn children with NO_COLOR=1, Node warns on stderr,
+  and exact stderr assertions fail (tests/cli.test.ts 44/44 without the
+  variable, 35/44 with it). That fragility is task 0078. Closed the task. No
+  product file changed.
 
 ## Evidence
 
@@ -1118,6 +1339,40 @@ guard logic:
   `.git`, and the enclosing sandbox refuses Apple Git's `/dev/null` open. This
   is the same environment limitation already recorded above, not a new product
   failure.
+- Final implementation declaration checks, 2026-09-13:
+  `npm run typecheck` and `npm run build` exited 0; `postbuild` wrote
+  `dist/build-info.json` with version `0.1.0`, `commit: null`, `dirty: null`,
+  and an RFC 3339 UTC `built_at`, and `node dist/cli/main.js --version` printed
+  that stamp on one line. A source call to
+  `staleBuildMessage(process.cwd())` returned `undefined`.
+- The final non-Git-backed `tests/*.test.ts` partition exited 0. With the
+  producer skip disabled only for the three task-owned package checks,
+  `tests/spbridge-package.test.ts` reported 3 passed, 0 failed: the manifest
+  admits no `src`, `npm pack --dry-run --json` reports no packed `src` path,
+  and the eight-step promotion document keeps seven commands in separate
+  marked blocks with the human gate before packing.
+- Final `NODE_OPTIONS='--test-reporter=tap' npm test` — 613 tests, 571 passed,
+  29 failed, and 13 skipped. Each failure is a Git-dependent fixture setup or
+  `git ls-files` failure caused by this producer copy having no `.git` and the
+  sandbox denying Git's `/dev/null` open; none reached a product assertion.
+  The real-checkout Git evidence already recorded above remains the evidence
+  for C2, C17, and the accepted `0082` baseline.
+- Implementation-correction verification, 2026-09-13:
+  - `env -u SPARTAN_BRIDGE_PRODUCER_ISOLATED node --import tsx --test
+    --test-name-pattern='package files has no entry|npm pack dry run contains no
+    src path|runtime promotion keeps every human command separate'
+    tests/spbridge-package.test.ts` — 3 passed, 0 failed, 0 skipped. The dry-run
+    pack still reports no packed `src/` path, and the promotion-document shape
+    remains valid after removing the ordering claim.
+  - `npm run typecheck` and `npm run build` — exit 0, including `postbuild`.
+    `node dist/cli/main.js --version` printed the new Git-less stamp on one line,
+    and a source call to `staleBuildMessage(process.cwd())` returned
+    `undefined`.
+  - `NODE_OPTIONS='--test-reporter=tap' npm test` — 613 tests, 571 passed, 29
+    failed, and 13 skipped. The failure count and cause match the prior run:
+    Git-backed fixtures cannot open `/dev/null` in this producer copy and fail
+    during Git setup before reaching product assertions. The correction's
+    focused tests are clean.
 
 ## Review
 
@@ -1128,8 +1383,17 @@ Findings:
 
 - None recorded.
 
-Bridge run: run_id=run-42315288-59fa-40a0-93a2-958e41ef0013 execution_id=exec-b9be14a4-ec9c-4ca9-a5e0-6bf8b811d637 review_kind=plan verdict=pass reason_code=review_passed host=codex launcher=codex-plan-reviewer-v1 model=gpt-5.6-sol effort=high model_observed=declared_unobserved policy_digest=sha256:c032b4cea31dd45976e0e4d6a6b689590f1f0a1a368378fd8a82e546eb9525a3 task_hash=sha256:91f0cc4f40eca00a75a38c0706214826c00d866edd704b91ef87eaa5cd801d1b agents_hash=sha256:6bd68578db8fd268d33c5847ff43bbf478ca1ed9c7a17c1a34df7ed723f5b8da timestamp=2026-09-13T08:39:29.043Z
+Bridge run: run_id=run-d35fd0e7-6cef-4c06-b4e2-4bd475323625 execution_id=exec-1e859120-2139-4b2d-886b-86cc38e02414 review_kind=plan verdict=pass reason_code=review_passed host=codex launcher=codex-plan-reviewer-v1 model=gpt-5.6-sol effort=high model_observed=declared_unobserved policy_digest=sha256:c032b4cea31dd45976e0e4d6a6b689590f1f0a1a368378fd8a82e546eb9525a3 spartan-bridge version=0.1.0 commit=e6539f92be0621c770b35752d35f673f5b89e663 dirty=false built_at=2026-09-13T09:21:32.781Z task_hash=sha256:ecf9c7811a8d47bcc270749998487797ee0f6b4cc896f64fb1c0fd28870a2afe agents_hash=sha256:6bd68578db8fd268d33c5847ff43bbf478ca1ed9c7a17c1a34df7ed723f5b8da timestamp=2026-09-13T12:11:00.572Z
 <!-- spartan-bridge:review:plan:end -->
+<!-- spartan-bridge:review:implementation:begin -->
+Verdict: APPROVED
+
+Findings:
+
+- None recorded.
+
+Bridge run: run_id=run-102a32aa-b2fb-4681-9bce-28c404d98935 execution_id=exec-66dee9b6-a5bc-40d4-b0c9-16cc7d932da6 review_kind=implementation verdict=pass reason_code=review_passed host=claude launcher=claude-plan-reviewer-v1 model=claude-opus-5 effort=high model_observed=declared_unobserved policy_digest=sha256:e363264f72a848d870898b8d1d1abe453a4f1e519f622f4415d9531d867023f6 spartan-bridge version=0.1.0 commit=e6539f92be0621c770b35752d35f673f5b89e663 dirty=false built_at=2026-09-13T09:21:32.781Z task_hash=sha256:7e66a5d72ccd866e1e622eca525f5f09ec01b49b516f9cb01e38f9dd23bcd292 agents_hash=sha256:6bd68578db8fd268d33c5847ff43bbf478ca1ed9c7a17c1a34df7ed723f5b8da timestamp=2026-09-13T12:26:17.963Z
+<!-- spartan-bridge:review:implementation:end -->
 
 ### Implementation review, adopted 2026-09-13
 
@@ -1160,11 +1424,18 @@ worktree while this task was in review and is committed separately.
 
 ## Blockers
 
-No product implementation blocker. Two machine-local steps are human actions and stay outside
-every automatic write scope. The operator replaces the current `npm link` with
-the pinned install D1 selects, and creates the development shell D2 documents.
-Until the first runs, the coupling this task describes remains in effect; until
-the second does, a round in this checkout exercises the pinned build.
+No product implementation blocker, and no outstanding machine-local action.
+
+D1's promotion is a human action outside every automatic write scope, and it has
+run: the global slot now holds a packed install of the build at commit
+`e6539f9`, carrying no `src/`, so the single-runtime coupling this task exists to
+remove is removed on this machine. Nothing further is pending. Later promotions
+are routine operation under D1 rather than a blocker on this task.
+
+An earlier revision of this section named a second machine-local step, the
+per-shell development selector. D2 removed that selector, so there is no second
+step: a development build is exercised by promoting it into the same single
+slot.
 
 One operational note for review: a prior producer round stopped on `.git`.
 D3's `GIT_OPTIONAL_LOCKS=0` removes the Git write introduced by the build stamp,
@@ -1174,34 +1445,9 @@ copy is the structural fix queued as task `0053`; this task does not absorb it.
 
 ## Next Action
 
-Address the two actionable `info` findings — `README_SHIM_EXEC_BIT` and
-`BRIDGE_LINE_BARE_TOKENS` — in one implementer round. The machine-local
-promotion remains the standing human gate recorded in Blockers.
-
+None. The implementation review passed
+(`run-102a32aa-b2fb-4681-9bce-28c404d98935`), its checks were verified in this
+checkout, and the task is closed.
 ## Next Handoff
 
-```text
-Recommended execution (human decides):
-- Repository: Agent Spartan Protocol Bridge
-- Host: Claude Code — the `implementer` binding in AGENTS.md
-- Model and effort: claude-opus-5, effort high
-- Role: implementer
-- Handoff: HX-009
-- Permission: writable
-- Invocation: `/spbridge` in a fresh session, passing the prompt block below as the argument
-```
-
-```text
-######## RUN AS PROMPT ##################
-Open `spartan/tasks/0083-consumer-repositories-run-a-pinned-runtime.md`. (handoff HX-009)
-
-Act as implementer. Correct the two recorded `info` findings: the README
-sentence that attributes a lost executable bit to the development shim, which
-runs `exec node <checkout>/dist/cli/main.js` and cannot produce that error, and
-the bare tokens in the `Bridge run:` line rendering. The round succeeds when
-both are corrected and no other behavior changes.
-Run the relevant repository checks and update the same task file.
-
-Return only the next handoff, or a completion notice if no work remains.
-######## END OF RUN AS PROMPT ##########
-```
+No outstanding handoff. The proposed review was consumed.

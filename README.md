@@ -65,7 +65,7 @@ Build a tarball from a chosen checkout and install that tarball globally. This k
 repositories on a fixed build while the development checkout changes. The package is not yet
 published to npm, so this README does not claim that `npm install -g spartan-bridge` works from the
 registry. Follow [Runtime promotion](docs/RUNTIME-PROMOTION.md) for the build, pack, install,
-rollback, and development-shell procedures. Verify a repository after adding its Bridge policy
+rollback, and development-build procedures. Verify a repository after adding its Bridge policy
 with:
 
 ```sh
@@ -405,23 +405,25 @@ The CLI entrypoint is `spartan-bridge`. After `npm run build`, run `node dist/cl
 
 ### Dogfooding the Bridge on this checkout
 
-The default `spartan-bridge` on `PATH` is the pinned consumer runtime. Follow
-[Runtime promotion](docs/RUNTIME-PROMOTION.md#select-the-development-runtime-in-one-shell) to open
-an operator-selected shell when a round must exercise this checkout's build. Run `/spbridge` on
-this repository from a built `dist/`. A `git pull` or
-any `src/` edit makes `dist/` stale; `review` and `mcp-stdio` then refuse with
+The default `spartan-bridge` on `PATH` is the pinned consumer runtime, and it
+is the runtime every round uses, including rounds on this checkout. A round that
+must exercise this checkout's own build runs it by promoting that build; see
+[Runtime promotion](docs/RUNTIME-PROMOTION.md).
+
+The stale-build workflow applies only when `spartan-bridge` is missing from
+`PATH` and the skill falls back to this checkout's `dist/`, or after reversing
+the promotion to restore the checkout's `npm link`. In either case, run
+`/spbridge` on this repository only from a built `dist/`. A `git pull` or any
+`src/` edit then makes `dist/` stale; `review` and `mcp-stdio` refuse with
 `dist/ is older than src/; run npm run build` (exit 1, no run created), and a
 detached `wait` loop reports a terminal document with
 `"reason_code": "stale_build"` — rebuild and re-invoke `/spbridge` fresh, never
-with `--after-run`. A chain whose implementer edits `src/` makes `dist/` stale
-by construction and cannot rebuild it, so `wait` follows that chain's terminal
-document with one stderr line naming the rebuild as the next round's
-precondition. The Bridge never runs the build itself, and unattended
-continuation across that process boundary is not offered: one human command
-stands between such a chain and the next round. If the global
-development shim breaks after a `tsc` rebuild (`permission denied` — the
-recreated `dist/cli/main.js` lost its executable bit), run `npm run build`
-again; `postbuild` restores the executable bit and writes the build stamp.
+with `--after-run`. A chain using either development-runtime path whose
+implementer edits `src/` makes `dist/` stale by construction and cannot rebuild
+it, so `wait` follows that chain's terminal document with one stderr line naming
+the rebuild as the next round's precondition. The Bridge never runs the build
+itself, and unattended continuation across that process boundary is not
+offered: one human command stands between such a chain and the next round.
 
 ## Project status and next milestone
 

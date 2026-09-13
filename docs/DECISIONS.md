@@ -1569,9 +1569,10 @@ the additive document change keeps schema version 2.
 
 **Decision:** On 2026-09-13, the supported consumer runtime became a globally
 installed package tarball built from a chosen checkout, rather than an `npm link`
-to the editable development tree. A developer can select the checkout build only
-through an operator-owned `PATH` shim in one shell; repository content and the
-portable skill's runtime-selection rule remain unchanged.
+to the editable development tree. A development build is selected by promoting
+it into the same global slot. Repository content and the portable skill's
+runtime-selection rule remain unchanged: while `PATH` resolves the installed
+runtime, repository content cannot displace it.
 
 `postbuild` now writes `dist/build-info.json` with the package version, Git commit
 and dirty state when Git is available, and the UTC build time. Status documents
@@ -1595,4 +1596,6 @@ same rendering in `doctor` and the review's terminal opening line, and retain it
 on the persisted `Bridge run:` line. The opening line names the dispatching
 invocation; the artifact line and its `task_artifact_written` event name the
 writing invocation. Persisted status and event records separately attribute run
-creation and later event appenders.
+creation and later event appenders. When `PATH` resolves no runtime, the skill's
+pre-existing workspace-local `dist/cli/main.js` fallback remains the bounded
+exception; it displaces no installed runtime because none is resolvable.

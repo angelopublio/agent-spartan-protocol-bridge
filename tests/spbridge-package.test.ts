@@ -44,12 +44,13 @@ test("runtime promotion keeps every human command separate and gates packing aft
     assert.equal(command.split("\n").length, 1, `marked block must contain one command: ${command}`);
     assert.doesNotMatch(command, /&&|;|\|/, `marked command must not chain: ${command}`);
   }
-  assert.deepEqual(commands.slice(0, 6), [
+  assert.deepEqual(commands.slice(0, 7), [
     "npm ci",
     "npm run build",
     "npm test",
-    "npm pack --pack-destination <a directory outside the repository>",
-    "npm -g install <the tarball written by step 5>",
+    "npm pack --pack-destination <a durable directory outside the repository>",
+    "mv <that directory>/spartan-bridge-<version>.tgz <that directory>/spartan-bridge-<version>-<commit>-<built_at digits>[-dirty].tgz",
+    "npm -g install <the tarball step 6 named>",
     "spartan-bridge --version",
   ]);
 
@@ -62,6 +63,16 @@ test("runtime promotion keeps every human command separate and gates packing aft
   assert.match(gate, /any other failure stops the\npromotion/);
   assert.match(gate, /Once task `0082` lands, the accepted baseline becomes zero failures/);
   assert.match(document, /A `built_at` older than\nstep 2's build means the promotion did not land/);
+
+  // C6: the rename is an ordered step and the filename form is stated with the
+  // derivation of every field from the build stamp.
+  assert.match(document, /eight steps in order: seven commands and one decision/);
+  const renameAt = document.indexOf("Step 6 renames it");
+  assert.ok(packAt >= 0 && packAt < renameAt);
+  assert.match(document, /spartan-bridge-<version>-<commit>-<built_at digits>\[-dirty\]\.tgz/);
+  assert.match(document, /every\s+non-digit removed and nothing truncated/);
+  assert.match(document, /the literal `nocommit` when the\s+stamp recorded `null`/);
+  assert.match(document, /Append `-dirty` when the stamp recorded\s+`dirty: true`/);
 });
 
 test("portable package is canonical and the Codex wrapper reuses it", { skip: IN_PRODUCER_WORKSPACE }, async () => {
