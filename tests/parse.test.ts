@@ -7,6 +7,13 @@ test("help is accepted as the only token", () => {
   assert.equal(parseArgv(["-h"]).kind, "help");
 });
 
+test("version is accepted as the only token", () => {
+  assert.deepEqual(parseArgv(["--version"]), { kind: "version" });
+  assert.deepEqual(parseArgv(["-v"]), { kind: "version" });
+  assert.equal(parseArgv(["--version", "extra"]).kind, "usage");
+  assert.match(HELP_TEXT, /spartan-bridge --version/);
+});
+
 test("unknown command and unknown options are usage errors", () => {
   assert.equal(parseArgv([]).kind, "usage");
   assert.equal(parseArgv(["start"]).kind, "usage");

@@ -23,6 +23,7 @@ import {
 import { formatReviewStreamLine, type ReviewStreamProgress } from "../adapters/review-stream.ts";
 import { resumeInterrupted, spawnDetachedReview, waitForRun } from "./detach.ts";
 import { formatTaskChainStatusReport, reportTaskChainStatus } from "./task-status.ts";
+import { formatRuntimeBuild, readRuntimeBuild } from "../runtime/build-info.ts";
 
 export const STALE_BUILD_MESSAGE = "dist/ is older than src/; run npm run build";
 
@@ -121,7 +122,7 @@ export function formatDuration(ms: number): string {
 
 export function formatReviewStartedLine(info: ReviewStartedProgress): string {
   const parts = localDateTime(Date.parse(info.created_at));
-  return `${parts.date} ${parts.time} review ${info.run_id} host=${info.host} model=${info.model} effort=${info.effort} client-context=${info.client_context}\n`;
+  return `${parts.date} ${parts.time} review ${info.run_id} host=${info.host} model=${info.model} effort=${info.effort} client-context=${info.client_context} ${formatRuntimeBuild(info.runtime_build)}\n`;
 }
 
 export function formatProducerStartedLine(info: {
@@ -137,7 +138,7 @@ export function formatProducerStartedLine(info: {
 
 export function formatImplementationReviewStartedLine(info: ReviewStartedProgress): string {
   const parts = localDateTime(Date.parse(info.created_at));
-  return `${parts.date} ${parts.time} implementation review ${info.run_id} host=${info.host} model=${info.model} effort=${info.effort} client-context=${info.client_context}\n`;
+  return `${parts.date} ${parts.time} implementation review ${info.run_id} host=${info.host} model=${info.model} effort=${info.effort} client-context=${info.client_context} ${formatRuntimeBuild(info.runtime_build)}\n`;
 }
 
 export function formatReviewTerminalLine(status: StatusDocument, tracker: LocalDayTracker): string {
@@ -444,6 +445,7 @@ export async function main(
   const timer = io.timer ?? DEFAULT_PROGRESS_TIMER;
   const parsed = parseArgv(argv);
   const packageRoot = packageRootFromRunningModule(moduleFile);
+  const runtimeBuild = packageRoot === undefined ? null : await readRuntimeBuild(packageRoot);
   if (packageRoot !== undefined) {
     const warning = await staleBuildMessage(packageRoot);
     if (warning !== undefined) {
@@ -455,6 +457,10 @@ export async function main(
   }
   if (parsed.kind === "help") {
     stdout.write(HELP_TEXT);
+    return 0;
+  }
+  if (parsed.kind === "version") {
+    stdout.write(`${formatRuntimeBuild(runtimeBuild)}\n`);
     return 0;
   }
   if (parsed.kind === "usage") {
@@ -472,13 +478,13 @@ export async function main(
     }
     return serveMcpStdio({
       repoRoot,
-      deps: createProductionDeps(env),
+      deps: createProductionDeps(env, runtimeBuild),
       stdin: process.stdin,
       stdout: process.stdout,
       stderr: process.stderr,
     });
   }
-  const deps = io.deps ?? createProductionDeps(env);
+  const deps = io.deps ?? createProductionDeps(env, runtimeBuild);
   if (parsed.kind === "wait") {
     let repoRoot: string;
     try {

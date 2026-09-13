@@ -11,6 +11,8 @@ import {
   type ReviewKind,
 } from "./contracts.ts";
 import type { AppDeps } from "./review.ts";
+import type { RuntimeBuild } from "./contracts.ts";
+import { formatRuntimeBuild } from "../runtime/build-info.ts";
 import { buildAdapterOutputExcerpt } from "./review.ts";
 import { AdapterFailureError, capabilitiesAllowed, isProducerAdapter, producerCapabilitiesAllowed, type LauncherCatalog } from "../adapters/adapter.ts";
 import {
@@ -85,6 +87,7 @@ const HOST_EXECUTABLE: Partial<Record<CanonicalHost, string>> = {
 
 export type DoctorReport = {
   repo_readable: boolean;
+  runtime_build: RuntimeBuild | null;
   policy: DoctorPolicyReadiness;
   registry: {
     readable: boolean;
@@ -313,6 +316,7 @@ export async function doctor(repo: string, deps: AppDeps): Promise<DoctorReport>
 
   return {
     repo_readable,
+    runtime_build: deps.runtimeBuild ?? null,
     policy,
     registry: { readable, schema_valid },
     launchers,
@@ -623,6 +627,7 @@ export function formatDoctorReport(report: DoctorReport): string {
     `repo: ${report.repo_readable ? "readable" : "unreadable"}`,
     formatPolicyLine(report),
     `registry: ${report.registry.readable ? "readable" : "unreadable"}; schema ${report.registry.schema_valid ? "valid" : "invalid"}`,
+    `runtime: ${formatRuntimeBuild(report.runtime_build)}`,
     ...report.launchers.map(
       (launcher) => `launcher ${launcher.id}: ${launcher.resolved ? "resolved" : "unresolved"}`,
     ),

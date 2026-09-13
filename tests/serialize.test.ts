@@ -8,10 +8,13 @@ import {
 } from "../src/core/contracts.ts";
 import {
   canonicalPolicyJson,
+  parseEventJson,
   parseStatusJson,
+  parseTransitionEventJson,
   parseTransitionStatusJson,
   policyDigest,
   serializeStatus,
+  serializeEvent,
   serializeTransitionEvent,
   serializeTransitionStatus,
 } from "../src/core/serialize.ts";
@@ -22,7 +25,48 @@ import type {
   StatusDocument,
   TransitionEventDocument,
   TransitionStatusDocument,
+  EventDocument,
 } from "../src/core/contracts.ts";
+
+const RUNTIME_BUILD = {
+  version: "0.1.0",
+  commit: "c".repeat(40),
+  dirty: true,
+  built_at: "2026-09-13T06:00:00.000Z",
+};
+
+function baseStatus(): StatusDocument {
+  return {
+    schema_version: 2,
+    run_id: "run-1",
+    state: "requested",
+    review_kind: "plan",
+    task_path: "spartan/tasks/x.md",
+    host: null,
+    client_context: null,
+    model: null,
+    effort: null,
+    model_observed: null,
+    policy_digest: null,
+    runtime_build: null,
+    artifact_hashes: { task: null, agents: null },
+    execution_id: null,
+    verdict: null,
+    reason_code: null,
+    task_write_state: null,
+    task_hash_after_write: null,
+    task_write_rejection_cause: null,
+    review_verdict_log: null,
+    reviewer_write: null,
+    adapter_failure: null,
+    pre_dispatch_diagnostic: null,
+    producer_identity: null,
+    review_chain: null,
+    transition_id: null,
+    created_at: "2026-09-13T06:00:00.000Z",
+    updated_at: "2026-09-13T06:00:00.000Z",
+  };
+}
 
 function baseTransitionStatus(producerDiagnostic: ProducerDiagnostic | null): TransitionStatusDocument {
   return {
@@ -34,6 +78,7 @@ function baseTransitionStatus(producerDiagnostic: ProducerDiagnostic | null): Tr
     task_path: "spartan/tasks/x.md",
     approved_task_hash: "sha256:abc",
     policy_digest: "sha256:def",
+    runtime_build: null,
     implementer_host: "cursor",
     implementer_launcher_id: "cursor-plan-reviewer-v1",
     lock_identity: "transition-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -70,6 +115,12 @@ const PINNED_JSON =
 test("canonical policy JSON key order is pinned for the digest", () => {
   assert.equal(canonicalPolicyJson(PINNED_POLICY), PINNED_JSON);
   assert.equal(policyDigest(PINNED_POLICY), `sha256:${createHash("sha256").update(PINNED_JSON).digest("hex")}`);
+});
+
+test("runtime build metadata is excluded from canonical policy JSON and its digest", () => {
+  const other = { ...PINNED_POLICY, runtime_build: RUNTIME_BUILD, emitting_build: RUNTIME_BUILD };
+  assert.equal(canonicalPolicyJson(other), PINNED_JSON);
+  assert.equal(policyDigest(other), policyDigest(PINNED_POLICY));
 });
 
 test("serializeStatus appends host client_context model effort and model_observed after task_path", () => {
@@ -115,6 +166,7 @@ test("serializeStatus appends host client_context model effort and model_observe
     "effort",
     "model_observed",
     "policy_digest",
+    "runtime_build",
     "artifact_hashes",
     "execution_id",
     "verdict",
@@ -693,4 +745,79 @@ test("parseTransitionStatusJson normalizes new keys on an older present producer
     snapshot_site: null,
     snapshot_cap: null,
   });
+});
+
+test("all persisted document families normalize missing or malformed build records to null", () => {
+  const malformed = { version: "0.1.0", commit: "short", dirty: false, built_at: "yesterday" };
+  const status = baseStatus();
+  assert.equal(parseStatusJson(JSON.stringify({ ...status, runtime_build: malformed })).runtime_build, null);
+  assert.equal(parseStatusJson(JSON.stringify({ ...status, runtime_build: undefined })).runtime_build, null);
+
+  const event: EventDocument = {
+    schema_version: 2,
+    sequence: 1,
+    timestamp: status.created_at,
+    run_id: status.run_id,
+    type: "run_requested",
+    state: "requested",
+    review_kind: "plan",
+    emitting_build: null,
+    policy_digest: null,
+    artifact_hashes: { task: null, agents: null },
+    execution_id: null,
+    verdict: null,
+    reason_code: null,
+    task_write_state: null,
+    task_hash_after_write: null,
+    task_write_rejection_cause: null,
+    pre_dispatch_diagnostic: null,
+  };
+  assert.equal(parseEventJson(JSON.stringify({ ...event, emitting_build: malformed })).emitting_build, null);
+  assert.equal(parseEventJson(JSON.stringify({ ...event, emitting_build: undefined })).emitting_build, null);
+
+  const transitionStatus = baseTransitionStatus(null);
+  assert.equal(
+    parseTransitionStatusJson(JSON.stringify({ ...transitionStatus, runtime_build: malformed })).runtime_build,
+    null,
+  );
+  assert.equal(
+    parseTransitionStatusJson(JSON.stringify({ ...transitionStatus, runtime_build: undefined })).runtime_build,
+    null,
+  );
+
+  const transitionEvent: TransitionEventDocument = {
+    schema_version: 2,
+    sequence: 1,
+    timestamp: status.created_at,
+    transition_id: transitionStatus.transition_id,
+    type: "authorization",
+    state: "authorized",
+    emitting_build: null,
+    reason_code: null,
+    producer_diagnostic: null,
+    unwritable_plan_targets: null,
+    producer_refused_paths: null,
+    declaration_invalid_detail: null,
+    review_run_id: null,
+  };
+  assert.equal(
+    parseTransitionEventJson(JSON.stringify({ ...transitionEvent, emitting_build: malformed })).emitting_build,
+    null,
+  );
+  assert.equal(
+    parseTransitionEventJson(JSON.stringify({ ...transitionEvent, emitting_build: undefined })).emitting_build,
+    null,
+  );
+});
+
+test("serializers copy only a valid closed runtime build record", () => {
+  const status = { ...baseStatus(), runtime_build: { ...RUNTIME_BUILD, secret: "drop" } } as StatusDocument;
+  const parsedStatus = JSON.parse(serializeStatus(status)) as { runtime_build: Record<string, unknown> };
+  assert.deepEqual(parsedStatus.runtime_build, RUNTIME_BUILD);
+
+  const transition = { ...baseTransitionStatus(null), runtime_build: RUNTIME_BUILD };
+  assert.deepEqual(
+    (JSON.parse(serializeTransitionStatus(transition)) as { runtime_build: unknown }).runtime_build,
+    RUNTIME_BUILD,
+  );
 });

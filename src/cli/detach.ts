@@ -12,7 +12,7 @@ import {
   readTransitionStatus,
   writeTransitionStatusAtomic,
 } from "../runtime/transition-store.ts";
-import { serializeStatus, serializeTransitionStatus } from "../core/serialize.ts";
+import { parseTransitionEventJson, serializeStatus, serializeTransitionStatus } from "../core/serialize.ts";
 import { SCHEMA_VERSION } from "../core/contracts.ts";
 import { WRITER_LOCK_NAME, acquireWriterLock, releaseWriterLock } from "../runtime/lock.ts";
 import type { AppDeps } from "../core/review.ts";
@@ -118,7 +118,7 @@ async function loadTransitionEvents(transDir: string): Promise<TransitionEventDo
     return text
       .split("\n")
       .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as TransitionEventDocument);
+      .map(parseTransitionEventJson);
   } catch {
     return [];
   }
@@ -414,7 +414,7 @@ export async function resumeInterrupted(
     const checkpoint = lastEvent?.type ?? null;
 
     if (checkpoint === null || !RESUMABLE_CHECKPOINTS.has(checkpoint)) {
-      await persistInterruptedTransition(transitionsDir, transition, now);
+      await persistInterruptedTransition(transitionsDir, transition, now, deps);
       if (heldTransitionId === transition.transition_id) {
         await fs.rm(lockPath, { force: true });
         lines.push(`released writer.lock held by interrupted transition ${transition.transition_id}`);
@@ -516,6 +516,7 @@ async function persistInterruptedTransition(
   transitionsDir: string,
   transition: TransitionStatusDocument,
   now: () => number,
+  deps: AppDeps,
 ): Promise<void> {
   const dir = path.join(transitionsDir, transition.transition_id);
   const updated: TransitionStatusDocument = {
@@ -540,6 +541,7 @@ async function persistInterruptedTransition(
     transition_id: transition.transition_id,
     type: "terminal_stop",
     state: "stopped",
+    emitting_build: deps.runtimeBuild ?? null,
     reason_code: "interrupted",
     producer_diagnostic: null,
     unwritable_plan_targets: transition.unwritable_plan_targets,

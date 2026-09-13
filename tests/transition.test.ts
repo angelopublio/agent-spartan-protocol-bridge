@@ -31,6 +31,7 @@ import {
   type AdapterProducerInput,
   type ProducerDiagnostic,
   type ProducerSnapshotSite,
+  type StatusDocument,
   type TransitionEventDocument,
 } from "../src/core/contracts.ts";
 import type { AppDeps, Clock } from "../src/core/review.ts";
@@ -40,6 +41,7 @@ import { advanceFromCheckpoint, continueAfterPlanReview, resolveAdvanceChainFrom
 import { composeTerminalCloseOut } from "../src/core/task-write.ts";
 import { sha256Bytes } from "../src/core/serialize.ts";
 import { acquireWriterLock, WRITER_LOCK_NAME } from "../src/runtime/lock.ts";
+import { readTransitionEvents, readTransitionStatus } from "../src/runtime/transition-store.ts";
 
 const execFileAsync = promisify(execFile);
 import {
@@ -276,6 +278,62 @@ test("malformed automatic config stops after plan pass with a separate transitio
   ) as { reason_code: string; verdict: string };
   assert.equal(plan.reason_code, "review_passed");
   assert.equal(plan.verdict, "pass");
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("a stopped transition records the creating build in status and its emitted event", async () => {
+  const { root, taskRel } = await makeRepo();
+  await fs.mkdir(path.join(root, "spartan-bridge"), { recursive: true });
+  await fs.writeFile(path.join(root, "spartan-bridge", "config.yaml"), "schema_version: 999\n", "utf8");
+  const plan: StatusDocument = {
+    schema_version: 2,
+    run_id: PLAN_ID,
+    state: "awaiting_implementer",
+    review_kind: "plan",
+    task_path: taskRel,
+    host: "cursor",
+    client_context: "personal",
+    model: "Composer-2.5",
+    effort: "none",
+    model_observed: "declared_unobserved",
+    policy_digest: "sha256:plan",
+    runtime_build: null,
+    artifact_hashes: { task: null, agents: null },
+    execution_id: "exec-plan",
+    verdict: "pass",
+    reason_code: "review_passed",
+    task_write_state: "written",
+    task_hash_after_write: "sha256:task",
+    task_write_rejection_cause: null,
+    review_verdict_log: null,
+    reviewer_write: null,
+    adapter_failure: null,
+    pre_dispatch_diagnostic: null,
+    producer_identity: null,
+    review_chain: null,
+    transition_id: null,
+    created_at: "2026-09-13T06:00:00.000Z",
+    updated_at: "2026-09-13T06:00:01.000Z",
+  };
+  const runtimeBuild = {
+    version: "0.1.0",
+    commit: "e".repeat(40),
+    dirty: false,
+    built_at: "2026-09-13T06:00:02.000Z",
+  };
+  const outcome = await continueAfterPlanReview(
+    plan,
+    { repo: root, task: taskRel },
+    testDeps({ clock: testClock(PLAN_ID), runtimeBuild }),
+  );
+  assert.equal(outcome.kind, "transition");
+  const transitionId = outcome.transition!.transition_id;
+  const transitionDir = path.join(root, ".spartan-bridge", "transitions", transitionId);
+  const status = await readTransitionStatus(transitionDir);
+  const events = (await readTransitionEvents(transitionDir)).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(status.runtime_build, runtimeBuild);
+  assert.ok(events.length > 0);
+  assert.ok(events.every((event) => JSON.stringify(event.emitting_build) === JSON.stringify(runtimeBuild)));
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -2334,6 +2392,18 @@ test("advanceFromCheckpoint: producer_finished dispatches implementation review 
   await writeBridgeConfig(root);
   const transitionId = "transition-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const transDir = path.join(root, ".spartan-bridge", "transitions", transitionId);
+  const originBuild = {
+    version: "0.1.0",
+    commit: "1".repeat(40),
+    dirty: false,
+    built_at: "2026-08-31T00:00:00.000Z",
+  };
+  const continuationBuild = {
+    version: "0.1.0",
+    commit: "2".repeat(40),
+    dirty: true,
+    built_at: "2026-09-01T00:00:00.000Z",
+  };
   await fs.mkdir(transDir, { recursive: true });
   await fs.writeFile(path.join(root, taskRel), readyImplementationTask(taskRel), "utf8");
   await fs.writeFile(
@@ -2347,6 +2417,7 @@ test("advanceFromCheckpoint: producer_finished dispatches implementation review 
       task_path: taskRel,
       approved_task_hash: null,
       policy_digest: null,
+      runtime_build: originBuild,
       implementer_host: null,
       implementer_launcher_id: null,
       lock_identity: null,
@@ -2387,6 +2458,7 @@ test("advanceFromCheckpoint: producer_finished dispatches implementation review 
     taskPath: taskRel,
     transition: { transitionDir: transDir, sequence: 2, status: JSON.parse(await fs.readFile(path.join(transDir, "status.json"), "utf8")) },
     deps: testDeps({
+      runtimeBuild: continuationBuild,
       createAdapter: () =>
         new FakeAdapter({
           result: () => {
@@ -2404,6 +2476,15 @@ test("advanceFromCheckpoint: producer_finished dispatches implementation review 
   if (outcome !== null && (outcome.kind === "review" || outcome.kind === "transition")) {
     assert.equal(outcome.transition?.state, "completed");
   }
+  const continuedStatus = await readTransitionStatus(transDir);
+  assert.deepEqual(continuedStatus.runtime_build, originBuild);
+  const continuedEvents = (await readTransitionEvents(transDir)).trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(continuedEvents.slice(2).length > 0);
+  assert.ok(
+    continuedEvents.slice(2).every(
+      (event) => JSON.stringify(event.emitting_build) === JSON.stringify(continuationBuild),
+    ),
+  );
   await fs.rm(root, { recursive: true, force: true });
 });
 

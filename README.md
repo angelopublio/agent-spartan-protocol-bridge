@@ -59,20 +59,14 @@ Prerequisites are Git, Node.js 20 or newer, and any official agent clients alrea
 authenticated through their own supported flows. The Bridge installation never copies or reads
 those clients' credentials.
 
-### Install the runtime from source
+### Install a pinned runtime
 
-```sh
-git clone https://github.com/angelopublio/agent-spartan-protocol-bridge.git
-cd agent-spartan-protocol-bridge
-npm ci
-npm run build
-npm link
-spartan-bridge --help
-```
-
-`npm link` exposes the checkout's `spartan-bridge` executable globally. The package is not yet
+Build a tarball from a chosen checkout and install that tarball globally. This keeps consumer
+repositories on a fixed build while the development checkout changes. The package is not yet
 published to npm, so this README does not claim that `npm install -g spartan-bridge` works from the
-registry. Verify a repository after adding its Bridge policy with:
+registry. Follow [Runtime promotion](docs/RUNTIME-PROMOTION.md) for the build, pack, install,
+rollback, and development-shell procedures. Verify a repository after adding its Bridge policy
+with:
 
 ```sh
 spartan-bridge doctor --repo /path/to/repository
@@ -123,13 +117,13 @@ while policy resolution, transitions, permissions, locks, adapter dispatch, and 
 `spartan-bridge` runtime. For Grok install, login, registry, and isolated-profile setup, see
 [Use Grok as an official client](docs/AUTHENTICATION-AND-SECURITY.md#use-grok-as-an-official-client).
 
-Update a source installation with:
+Update the pinned runtime by repeating the tested tarball promotion in
+[Runtime promotion](docs/RUNTIME-PROMOTION.md). Update the portable skill and optional plugin with:
 
 ```sh
 git pull --ff-only
 npm ci
 npm run build
-npm link
 ./agent-skill/scripts/manage-install.sh install all
 codex plugin remove spbridge@spartan-bridge
 codex plugin add spbridge@spartan-bridge
@@ -411,7 +405,10 @@ The CLI entrypoint is `spartan-bridge`. After `npm run build`, run `node dist/cl
 
 ### Dogfooding the Bridge on this checkout
 
-Run `/spbridge` on this repository only from a built `dist/`. A `git pull` or
+The default `spartan-bridge` on `PATH` is the pinned consumer runtime. Follow
+[Runtime promotion](docs/RUNTIME-PROMOTION.md#select-the-development-runtime-in-one-shell) to open
+an operator-selected shell when a round must exercise this checkout's build. Run `/spbridge` on
+this repository from a built `dist/`. A `git pull` or
 any `src/` edit makes `dist/` stale; `review` and `mcp-stdio` then refuse with
 `dist/ is older than src/; run npm run build` (exit 1, no run created), and a
 detached `wait` loop reports a terminal document with
@@ -422,10 +419,9 @@ document with one stderr line naming the rebuild as the next round's
 precondition. The Bridge never runs the build itself, and unattended
 continuation across that process boundary is not offered: one human command
 stands between such a chain and the next round. If the global
-`spartan-bridge` command breaks after a `tsc`
-rebuild (`permission denied` — the recreated `dist/cli/main.js` lost its
-executable bit), run `chmod +x dist/cli/main.js`, `npm link` again, or fall back
-to `node dist/cli/main.js`.
+development shim breaks after a `tsc` rebuild (`permission denied` — the
+recreated `dist/cli/main.js` lost its executable bit), run `npm run build`
+again; `postbuild` restores the executable bit and writes the build stamp.
 
 ## Project status and next milestone
 
@@ -439,6 +435,7 @@ This is an early-stage project with one primary maintainer. Development uses AI 
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Routing and workflows](docs/ROUTING-AND-WORKFLOWS.md)
+- [Runtime promotion](docs/RUNTIME-PROMOTION.md)
 - [Optional Board integration](docs/BOARD.md)
 - [Authentication and security](docs/AUTHENTICATION-AND-SECURITY.md), including [Set up on a new Mac](docs/AUTHENTICATION-AND-SECURITY.md#set-up-on-a-new-mac), [User skills under isolation](docs/AUTHENTICATION-AND-SECURITY.md#user-skills-under-isolation), and [Verify isolation](docs/AUTHENTICATION-AND-SECURITY.md#verify-isolation)
 - [Open-source policy](docs/OPEN-SOURCE-POLICY.md)

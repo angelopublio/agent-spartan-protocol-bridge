@@ -720,6 +720,7 @@ test("optional progress is called once at review_started and skipped when prepar
     model: "Composer-2.5",
     effort: "none",
     client_context: "personal",
+    runtime_build: null,
     created_at: outcome.status!.created_at,
   });
   assert.deepEqual(Object.keys(started[0] as object).sort(), [
@@ -729,6 +730,7 @@ test("optional progress is called once at review_started and skipped when prepar
     "host",
     "model",
     "run_id",
+    "runtime_build",
   ]);
   await fs.rm(root, { recursive: true, force: true });
 
@@ -752,3 +754,37 @@ test("optional progress is called once at review_started and skipped when prepar
 });
 
 void os;
+
+test("review status keeps its origin build and every event names its emitting build", async () => {
+  const { root, taskRel } = await makeRepo();
+  const runtimeBuild = {
+    version: "0.1.0",
+    commit: "d".repeat(40),
+    dirty: true,
+    built_at: "2026-09-13T06:00:00.000Z",
+  };
+  let startedBuild: unknown;
+  const outcome = await runReview(
+    { repo: root, task: taskRel },
+    testDeps({ clock: testClock(RUN_ID), runtimeBuild }),
+    { started: (info) => { startedBuild = info.runtime_build; } },
+  );
+  assert.deepEqual(startedBuild, runtimeBuild);
+  assert.equal(outcome.status?.runtime_build?.commit, runtimeBuild.commit);
+  const { status, events } = await loadRun(root, RUN_ID);
+  assert.deepEqual(status.runtime_build, runtimeBuild);
+  assert.ok(events.length > 0);
+  assert.deepEqual(events[0]?.emitting_build, runtimeBuild);
+  assert.equal(events[0]?.type, "run_requested");
+  assert.ok(events.every((event) => JSON.stringify(event.emitting_build) === JSON.stringify(runtimeBuild)));
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("source execution without a resolved build records null provenance", async () => {
+  const { root, taskRel } = await makeRepo();
+  await runReview({ repo: root, task: taskRel }, testDeps({ clock: testClock(RUN_ID) }));
+  const { status, events } = await loadRun(root, RUN_ID);
+  assert.equal(status.runtime_build, null);
+  assert.ok(events.every((event) => event.emitting_build === null));
+  await fs.rm(root, { recursive: true, force: true });
+});

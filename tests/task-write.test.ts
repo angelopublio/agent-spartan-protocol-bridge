@@ -39,6 +39,7 @@ import {
 } from "../src/core/task-write.ts";
 import { runReview } from "../src/core/review.ts";
 import { sha256Bytes } from "../src/core/serialize.ts";
+import { formatRuntimeBuild } from "../src/runtime/build-info.ts";
 import { parseTaskFrontmatter } from "../src/policy/task-frontmatter.ts";
 import {
   DEFAULT_REVIEW_SECTION,
@@ -214,6 +215,51 @@ test("pass and changes_requested write the owned region; human_required and bloc
   }
 });
 
+test("Bridge run line and task_artifact_written event name the writing build, not the origin build", async () => {
+  const { root, taskRel } = await writeRepo({ task: transitionTaskMd() });
+  const originBuild = {
+    version: "0.1.0",
+    commit: "1".repeat(40),
+    dirty: false,
+    built_at: "2026-09-13T06:00:00.000Z",
+  };
+  const writingBuild = {
+    version: "0.1.0",
+    commit: "2".repeat(40),
+    dirty: true,
+    built_at: "2026-09-13T07:00:00.000Z",
+  };
+  const deps = testDeps({
+    clock: testClock(RUN_ID),
+    runtimeBuild: originBuild,
+    source: {
+      result() {
+        // Model a later invocation continuing the already-created run.
+        deps.runtimeBuild = writingBuild;
+        return passResult();
+      },
+    },
+  });
+  await runReview({ repo: root, task: taskRel }, deps);
+
+  const task = await fs.readFile(path.join(root, taskRel), "utf8");
+  const writingRendering = formatRuntimeBuild(writingBuild);
+  const escapedRendering = writingRendering.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(task, new RegExp(`policy_digest=sha256:[^ ]+ ${escapedRendering} task_hash=`));
+  assert.equal(task.includes(formatRuntimeBuild(originBuild)), false);
+
+  const { status, events } = await loadRun(root, RUN_ID);
+  assert.deepEqual(status.runtime_build, originBuild);
+  const written = events.find((event) => event.type === "task_artifact_written");
+  assert.deepEqual(written?.emitting_build, writingBuild);
+  assert.ok(
+    events.slice(0, 3).every(
+      (event) => JSON.stringify(event.emitting_build) === JSON.stringify(originBuild),
+    ),
+  );
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("two successive accepted reviews replace the owned region in full", async () => {
   const { root, taskRel } = await writeRepo();
   await runReview(
@@ -329,6 +375,7 @@ test("status.json key order includes the new write fields as null before the wri
     "effort",
     "model_observed",
     "policy_digest",
+    "runtime_build",
     "artifact_hashes",
     "execution_id",
     "verdict",
@@ -364,6 +411,7 @@ test("status.json key order includes the new write fields as null before the wri
       "type",
       "state",
       "review_kind",
+      "emitting_build",
       "policy_digest",
       "artifact_hashes",
       "execution_id",
@@ -643,6 +691,7 @@ test("renderRegion returns null when the owned region exceeds the byte cap", () 
       effort: "none",
       model_observed: "declared_unobserved",
       policy_digest: "sha256:abc",
+      emitting_build: null,
       task_hash: "sha256:def",
       agents_hash: "sha256:ghi",
       timestamp: "2026-08-16T12:00:00.000Z",
@@ -664,6 +713,7 @@ function sampleMeta(overrides?: Partial<TaskWriteMeta>): TaskWriteMeta {
     effort: "none",
     model_observed: "declared_unobserved",
     policy_digest: "sha256:abc",
+    emitting_build: null,
     task_hash: "sha256:def",
     agents_hash: "sha256:ghi",
     timestamp: "2026-08-16T12:00:00.000Z",

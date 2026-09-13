@@ -14,6 +14,56 @@ const canonicalSkill = path.join(packageRoot, "skills", "spbridge");
 
 const IN_PRODUCER_WORKSPACE = process.env[PRODUCER_ISOLATED_WORKSPACE_ENV] === "1";
 
+test("package files has no entry that admits src", async () => {
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+  ) as { files: string[] };
+  for (const entry of manifest.files) {
+    const root = entry.replace(/^\.\//, "").split("/")[0] ?? "";
+    assert.notEqual(root, "src", `files entry admits src: ${entry}`);
+    assert.doesNotMatch(root, /[*?{}[\]]/, `files entry has a root glob that could admit src: ${entry}`);
+  }
+});
+
+test("npm pack dry run contains no src path", { skip: IN_PRODUCER_WORKSPACE }, async () => {
+  const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], { cwd: repoRoot });
+  const reports = JSON.parse(stdout) as Array<{ files: Array<{ path: string }> }>;
+  assert.equal(reports.length, 1);
+  assert.deepEqual(
+    reports[0]!.files.filter((file) => file.path === "src" || file.path.startsWith("src/")),
+    [],
+  );
+});
+
+test("runtime promotion keeps every human command separate and gates packing after tests", async () => {
+  const document = await fs.readFile(path.join(repoRoot, "docs", "RUNTIME-PROMOTION.md"), "utf8");
+  const blockPattern = /######## RUN ON TERMINAL ################\n([\s\S]*?)\n######## END OF RUN ON TERMINAL ########/g;
+  const commands = [...document.matchAll(blockPattern)].map((match) => match[1] ?? "");
+  assert.ok(commands.length >= 10);
+  for (const command of commands) {
+    assert.equal(command.split("\n").length, 1, `marked block must contain one command: ${command}`);
+    assert.doesNotMatch(command, /&&|;|\|/, `marked command must not chain: ${command}`);
+  }
+  assert.deepEqual(commands.slice(0, 6), [
+    "npm ci",
+    "npm run build",
+    "npm test",
+    "npm pack --pack-destination <a directory outside the repository>",
+    "npm -g install <the tarball written by step 5>",
+    "spartan-bridge --version",
+  ]);
+
+  const testAt = document.indexOf("npm test");
+  const gateAt = document.indexOf("Step 4 is the promotion gate");
+  const packAt = document.indexOf("npm pack --pack-destination");
+  assert.ok(testAt >= 0 && testAt < gateAt && gateAt < packAt);
+  const gate = document.slice(gateAt, packAt);
+  assert.match(gate, /pre-existing\n`repo-hygiene` tilde failure tracked by task `0082`/);
+  assert.match(gate, /any other failure stops the\npromotion/);
+  assert.match(gate, /Once task `0082` lands, the accepted baseline becomes zero failures/);
+  assert.match(document, /A `built_at` older than\nstep 2's build means the promotion did not land/);
+});
+
 test("portable package is canonical and the Codex wrapper reuses it", { skip: IN_PRODUCER_WORKSPACE }, async () => {
   await fs.access(path.join(canonicalSkill, "SKILL.md"));
   await assert.rejects(fs.lstat(path.join(repoRoot, "skills", "spbridge")));

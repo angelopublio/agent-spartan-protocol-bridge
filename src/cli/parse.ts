@@ -1,5 +1,6 @@
 export type ParsedCli =
   | { kind: "help" }
+  | { kind: "version" }
   | { kind: "usage"; message: string }
   | { kind: "review"; repo: string; task: string; after_run?: string; detach?: boolean; run_id?: string }
   | { kind: "wait"; repo: string; run: string; timeout_ms?: number }
@@ -33,6 +34,9 @@ export function parseArgv(argv: string[]): ParsedCli {
   }
   if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
     return { kind: "help" };
+  }
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
+    return { kind: "version" };
   }
   const command = argv[0];
   if (!command || command.startsWith("-")) {
@@ -275,6 +279,7 @@ export const HELP_TEXT = `spartan-bridge — Agent Spartan Protocol Bridge CLI
 
 Usage:
   spartan-bridge --help
+  spartan-bridge --version
   spartan-bridge review --repo <path> --task <repo-relative-contained-path> [--after-run <run-id>] [--detach]
   spartan-bridge wait --repo <path> --run <run-id> [--timeout-ms <n>]
   spartan-bridge resume --repo <path>
@@ -287,6 +292,7 @@ Usage:
   spartan-bridge mcp-stdio [--repo <path>]
 
 Commands:
+  --version           Print the runtime build identifier
   review              Create one plan-review run and, when authorized, continue the foreground successor chain
   wait                Block up to --timeout-ms for a detached review chain to reach a terminal state, then print its document
   resume              Recover an interrupted detached chain: release a stale writer lock, finish a checkpointed transition, or stop

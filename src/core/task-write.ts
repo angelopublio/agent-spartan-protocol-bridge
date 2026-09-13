@@ -12,10 +12,12 @@ import type {
   ReviewFinding,
   ReviewKind,
   ReviewResult,
+  RuntimeBuild,
   TaskWriteRejectionCause,
 } from "./contracts.ts";
 import { isReviewKind, VERDICT_TO_TERMINAL } from "./contracts.ts";
 import { sha256Bytes } from "./serialize.ts";
+import { formatRuntimeBuild } from "../runtime/build-info.ts";
 
 export const REVIEW_BEGIN = "<!-- spartan-bridge:review:begin -->";
 export const REVIEW_END = "<!-- spartan-bridge:review:end -->";
@@ -37,6 +39,7 @@ export type TaskWriteMeta = {
   effort: string;
   model_observed: ModelObserved;
   policy_digest: string;
+  emitting_build: RuntimeBuild | null;
   task_hash: string;
   agents_hash: string;
   timestamp: string;
@@ -583,7 +586,7 @@ function renderFinding(id: string, severity: ReviewFinding["severity"], message:
 }
 
 function renderBridgeRunLine(meta: TaskWriteMeta): string {
-  return `Bridge run: run_id=${meta.run_id} execution_id=${meta.execution_id} review_kind=${meta.review_kind} verdict=${meta.verdict} reason_code=${meta.reason_code} host=${meta.host} launcher=${meta.launcher_id} model=${meta.model} effort=${meta.effort} model_observed=${meta.model_observed} policy_digest=${meta.policy_digest} task_hash=${meta.task_hash} agents_hash=${meta.agents_hash} timestamp=${meta.timestamp}`;
+  return `Bridge run: run_id=${meta.run_id} execution_id=${meta.execution_id} review_kind=${meta.review_kind} verdict=${meta.verdict} reason_code=${meta.reason_code} host=${meta.host} launcher=${meta.launcher_id} model=${meta.model} effort=${meta.effort} model_observed=${meta.model_observed} policy_digest=${meta.policy_digest} ${formatRuntimeBuild(meta.emitting_build)} task_hash=${meta.task_hash} agents_hash=${meta.agents_hash} timestamp=${meta.timestamp}`;
 }
 
 function sanitizeText(value: string): string {

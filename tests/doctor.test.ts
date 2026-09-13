@@ -12,7 +12,10 @@ import {
   CodexAdapter,
 } from "../src/adapters/codex.ts";
 import { FakeAdapter, createLauncherCatalog, fakeCapabilities } from "../src/adapters/fake.ts";
+import { formatReviewStartedLine } from "../src/cli/main.ts";
 import { doctor, doctorExitCode, formatDoctorReport, wrapperLauncherWarnings } from "../src/core/doctor.ts";
+import { renderRegion } from "../src/core/task-write.ts";
+import { formatRuntimeBuild } from "../src/runtime/build-info.ts";
 import {
   constantSource,
   makeRepo,
@@ -114,6 +117,80 @@ test("doctor reports configured policy after the repository line and leaves exis
   assert.doesNotMatch(formatted, /entitlement/i);
   assert.doesNotMatch(formatted, /network/i);
   assert.doesNotMatch(formatted, /session ready/i);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("version, doctor, review opening, and Bridge run surfaces share one build rendering", async () => {
+  const { root } = await makeRepo({ agents: validAgentsMd() });
+  const runtimeBuild = {
+    version: "0.1.0",
+    commit: "b".repeat(40),
+    dirty: false,
+    built_at: "2026-09-13T06:00:00.000Z",
+  };
+  const report = await doctor(root, testDeps({ runtimeBuild }));
+  const rendering = formatRuntimeBuild(runtimeBuild);
+  const opening = formatReviewStartedLine({
+    run_id: "run-11111111-1111-4111-8111-111111111111",
+    host: "cursor",
+    model: "Composer-2.5",
+    effort: "none",
+    client_context: "personal",
+    runtime_build: runtimeBuild,
+    created_at: "2026-09-13T06:00:00.000Z",
+  });
+  const region = renderRegion(passResult(), {
+    run_id: "run-1",
+    execution_id: "exec-1",
+    review_kind: "plan",
+    verdict: "pass",
+    reason_code: "review_passed",
+    host: "cursor",
+    launcher_id: "fake-reviewer-v1",
+    model: "Composer-2.5",
+    effort: "none",
+    model_observed: "declared_unobserved",
+    policy_digest: "sha256:abc",
+    emitting_build: runtimeBuild,
+    task_hash: "sha256:def",
+    agents_hash: "sha256:ghi",
+    timestamp: "2026-09-13T06:00:00.000Z",
+  });
+  assert.equal(`${rendering}\n`, `spartan-bridge version=0.1.0 commit=${"b".repeat(40)} dirty=false built_at=2026-09-13T06:00:00.000Z\n`);
+  assert.equal(formatDoctorReport(report).includes(`runtime: ${rendering}`), true);
+  assert.equal(opening.includes(rendering), true);
+  assert.equal(region?.includes(rendering), true);
+
+  const unknown = await doctor(root, testDeps());
+  const unknownRendering = formatRuntimeBuild(null);
+  assert.equal(unknownRendering, "spartan-bridge build unknown");
+  assert.equal(formatDoctorReport(unknown).includes(`runtime: ${unknownRendering}`), true);
+  assert.equal(formatReviewStartedLine({
+    run_id: "run-11111111-1111-4111-8111-111111111111",
+    host: "cursor",
+    model: "Composer-2.5",
+    effort: "none",
+    client_context: "personal",
+    runtime_build: null,
+    created_at: "2026-09-13T06:00:00.000Z",
+  }).includes(unknownRendering), true);
+  assert.equal(renderRegion(passResult(), {
+    run_id: "run-1",
+    execution_id: "exec-1",
+    review_kind: "plan",
+    verdict: "pass",
+    reason_code: "review_passed",
+    host: "cursor",
+    launcher_id: "fake-reviewer-v1",
+    model: "Composer-2.5",
+    effort: "none",
+    model_observed: "declared_unobserved",
+    policy_digest: "sha256:abc",
+    emitting_build: null,
+    task_hash: "sha256:def",
+    agents_hash: "sha256:ghi",
+    timestamp: "2026-09-13T06:00:00.000Z",
+  })?.includes(unknownRendering), true);
   await fs.rm(root, { recursive: true, force: true });
 });
 

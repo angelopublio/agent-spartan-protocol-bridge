@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EventDocument, ReviewResult, StatusDocument, WorkspaceManifest } from "../core/contracts.ts";
-import { parseStatusJson, serializeEvent, serializeStatus } from "../core/serialize.ts";
+import { parseEventJson, parseStatusJson, serializeEvent, serializeStatus } from "../core/serialize.ts";
 import { isInside } from "./paths.ts";
 
 export const ADAPTER_STDERR_LOG = "adapter-stderr.log";
@@ -115,7 +115,7 @@ export async function readEventsParsed(runDir: string): Promise<EventDocument[]>
   return text
     .split("\n")
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as EventDocument);
+    .map(parseEventJson);
 }
 
 export async function writeWorkspaceManifestAtomic(

@@ -55,6 +55,7 @@ import {
   type ReviewChainRefused,
   type ReviewKind,
   type ReviewerWriteRecord,
+  type RuntimeBuild,
   type RunState,
   type StatusDocument,
   type TaskWriteRejectionCause,
@@ -79,6 +80,7 @@ export type AppDeps = {
   registry: RegistrySource;
   catalog: LauncherCatalog;
   clock: Clock;
+  runtimeBuild?: RuntimeBuild | null;
   snapshotCaps?: { entries?: number; hashBytes?: number };
   // Per-site cap overrides make every producer snapshot stop reproducible
   // without changing the production defaults. Repository snapshots retain
@@ -116,6 +118,7 @@ export type ReviewStartedProgress = {
   model: string;
   effort: EffortLevel;
   client_context: string;
+  runtime_build: RuntimeBuild | null;
   created_at: string;
 };
 
@@ -234,6 +237,7 @@ export async function runReview(
       effort: null,
       model_observed: null,
       policy_digest: null,
+      runtime_build: deps.runtimeBuild ?? null,
       artifact_hashes: emptyHashes(),
       execution_id: null,
       verdict: null,
@@ -539,6 +543,7 @@ export async function runReview(
       model: resolvedPolicy.model,
       effort: resolvedPolicy.effort,
       client_context: resolvedPolicy.client_context,
+      runtime_build: deps.runtimeBuild ?? null,
       created_at: run.status.created_at,
     });
     if (progress?.stream !== undefined) {
@@ -689,6 +694,7 @@ export async function runReview(
           effort: resolvedPolicy.effort,
           model_observed: compared,
           policy_digest: digest,
+          emitting_build: deps.runtimeBuild ?? null,
           task_hash: hashes.task ?? "",
           agents_hash: hashes.agents ?? "",
           timestamp: rfc3339Utc(deps.clock.now()),
@@ -1022,6 +1028,7 @@ async function emit(run: MutableRun, deps: AppDeps, type: EventType, state: RunS
     type,
     state,
     review_kind: run.status.review_kind,
+    emitting_build: deps.runtimeBuild ?? null,
     policy_digest: run.status.policy_digest,
     artifact_hashes: { ...run.status.artifact_hashes },
     execution_id: run.status.execution_id,

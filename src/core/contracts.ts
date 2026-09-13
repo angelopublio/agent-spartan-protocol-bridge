@@ -51,6 +51,13 @@ export type ProducerIdentity = {
   host: CanonicalHost;
 };
 
+export type RuntimeBuild = {
+  version: string;
+  commit: string | null;
+  dirty: boolean | null;
+  built_at: string;
+};
+
 export type RunState =
   | "requested"
   | "policy_resolved"
@@ -538,6 +545,8 @@ export type TransitionStatusDocument = {
   task_path: string;
   approved_task_hash: string | null;
   policy_digest: string | null;
+  // The runtime build used by the invocation that created this transition.
+  runtime_build: RuntimeBuild | null;
   implementer_host: CanonicalHost | null;
   implementer_launcher_id: string | null;
   lock_identity: string | null;
@@ -559,6 +568,8 @@ export type TransitionEventDocument = {
   transition_id: string;
   type: TransitionEventType;
   state: TransitionState;
+  // The runtime build used by the invocation that appended this event line.
+  emitting_build: RuntimeBuild | null;
   reason_code: ReasonCode | null;
   producer_diagnostic: ProducerDiagnostic | null;
   unwritable_plan_targets: string[] | null;
@@ -579,6 +590,8 @@ export type StatusDocument = {
   effort: EffortLevel | null;
   model_observed: ModelObserved | null;
   policy_digest: string | null;
+  // The runtime build used by the invocation that created this review run.
+  runtime_build: RuntimeBuild | null;
   artifact_hashes: ArtifactHashes;
   execution_id: string | null;
   verdict: BridgeVerdict | null;
@@ -610,6 +623,8 @@ export type EventDocument = {
   type: EventType;
   state: RunState;
   review_kind: ReviewKind;
+  // The runtime build used by the invocation that appended this event line.
+  emitting_build: RuntimeBuild | null;
   policy_digest: string | null;
   artifact_hashes: ArtifactHashes;
   execution_id: string | null;

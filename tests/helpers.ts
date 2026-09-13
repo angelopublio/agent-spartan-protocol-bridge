@@ -418,6 +418,7 @@ export function testDeps(options?: {
   snapshotCaps?: { entries?: number; hashBytes?: number };
   producerSnapshotCaps?: AppDeps["producerSnapshotCaps"];
   applyProducerMergeDeps?: AppDeps["applyProducerMergeDeps"];
+  runtimeBuild?: AppDeps["runtimeBuild"];
 }): AppDeps {
   const source = options?.source ?? constantSource(passResult());
   return {
@@ -427,6 +428,7 @@ export function testDeps(options?: {
     snapshotCaps: options?.snapshotCaps,
     producerSnapshotCaps: options?.producerSnapshotCaps,
     applyProducerMergeDeps: options?.applyProducerMergeDeps,
+    runtimeBuild: options?.runtimeBuild,
   };
 }
 

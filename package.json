@@ -26,7 +26,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "postbuild": "chmod +x dist/cli/main.js",
+    "postbuild": "node dist/build/stamp.js && chmod +x dist/cli/main.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts"
   },

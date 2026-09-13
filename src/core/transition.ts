@@ -47,7 +47,7 @@ import { planTargetsUnwritablePath } from "./plan-target-scan.ts";
 import { boundProducerRefusedPaths } from "./producer-refused-paths.ts";
 import { validateProducerDeclaration, basenameTaskPath } from "./producer-declaration.ts";
 import { runReview, buildResolvedPolicy, type AppDeps, type ReviewOutcome, type ReviewProgress } from "./review.ts";
-import { policyDigest, sha256Bytes } from "./serialize.ts";
+import { parseTransitionEventJson, policyDigest, sha256Bytes } from "./serialize.ts";
 import { isTerminalCloseOutApplied, writeTerminalCloseOut } from "./task-write.ts";
 import { snapshotDiff, snapshotTree, SnapshotCapError, type TreeSnapshot } from "./snapshot.ts";
 import {
@@ -170,7 +170,7 @@ async function loadTransitionEvents(transitionDir: string): Promise<TransitionEv
     return text
       .split("\n")
       .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as TransitionEventDocument);
+      .map(parseTransitionEventJson);
   } catch {
     return [];
   }
@@ -441,13 +441,13 @@ export async function continueAfterPlanReview(
   try {
     ({ transitionsDir } = await resolveRuntimeLayout(repoRoot));
   } catch {
-    return syntheticStop(plan, input.task, transitionId, "config_invalid");
+    return syntheticStop(plan, input.task, transitionId, "config_invalid", null, deps.runtimeBuild ?? null);
   }
   let transitionDir: string;
   try {
     transitionDir = await createExclusiveTransitionDir(transitionsDir, repoRoot, transitionId);
   } catch {
-    return syntheticStop(plan, input.task, transitionId, "config_invalid");
+    return syntheticStop(plan, input.task, transitionId, "config_invalid", null, deps.runtimeBuild ?? null);
   }
   const createdAt = rfc3339Utc(deps.clock.now());
   const transition: MutableTransition = {
@@ -462,6 +462,7 @@ export async function continueAfterPlanReview(
       task_path: input.task,
       approved_task_hash: plan.task_hash_after_write,
       policy_digest: plan.policy_digest,
+      runtime_build: deps.runtimeBuild ?? null,
       implementer_host: admission.binding.host,
       implementer_launcher_id: launcherId,
       lock_identity: null,
@@ -1121,13 +1122,22 @@ async function createStoppedTransition(
     const { transitionsDir } = await resolveRuntimeLayout(repoRoot);
     transitionDir = await createExclusiveTransitionDir(transitionsDir, repoRoot, transitionId);
   } catch {
-    return syntheticStop(plan, taskPath, transitionId, reason, unwritablePlanTargets);
+    return syntheticStop(plan, taskPath, transitionId, reason, unwritablePlanTargets, deps.runtimeBuild ?? null);
   }
   const createdAt = rfc3339Utc(deps.clock.now());
   const transition: MutableTransition = {
     transitionDir,
     sequence: 0,
-    status: emptyTransition(transitionId, plan, taskPath, createdAt, unwritablePlanTargets),
+    status: emptyTransition(
+      transitionId,
+      plan,
+      taskPath,
+      createdAt,
+      unwritablePlanTargets,
+      null,
+      null,
+      deps.runtimeBuild ?? null,
+    ),
   };
   return stopTransition(transition, deps, "stopped", reason, null, unwritablePlanTargets);
 }
@@ -1138,6 +1148,7 @@ function syntheticStop(
   transitionId: string,
   reason: ReasonCode,
   unwritablePlanTargets: string[] | null = null,
+  runtimeBuild: import("./contracts.ts").RuntimeBuild | null = null,
 ): SuccessorOutcome {
   const createdAt = plan.updated_at;
   return {
@@ -1146,7 +1157,7 @@ function syntheticStop(
     kind: "transition",
     status: null,
     transition: {
-      ...emptyTransition(transitionId, plan, taskPath, createdAt, unwritablePlanTargets),
+      ...emptyTransition(transitionId, plan, taskPath, createdAt, unwritablePlanTargets, null, null, runtimeBuild),
       state: "stopped",
       reason_code: reason,
     },
@@ -1162,6 +1173,7 @@ function emptyTransition(
   unwritablePlanTargets: string[] | null = null,
   declarationInvalidDetail: string | null = null,
   producerRefusedPaths: string[] | null = null,
+  runtimeBuild: import("./contracts.ts").RuntimeBuild | null = null,
 ): TransitionStatusDocument {
   return {
     schema_version: SCHEMA_VERSION,
@@ -1172,6 +1184,7 @@ function emptyTransition(
     task_path: taskPath,
     approved_task_hash: plan.task_hash_after_write,
     policy_digest: plan.policy_digest,
+    runtime_build: runtimeBuild,
     implementer_host: null,
     implementer_launcher_id: null,
     lock_identity: null,
@@ -1240,6 +1253,7 @@ async function emitTransition(
     transition_id: transition.status.transition_id,
     type,
     state,
+    emitting_build: deps.runtimeBuild ?? null,
     reason_code: transition.status.reason_code,
     producer_diagnostic: transition.status.producer_diagnostic,
     unwritable_plan_targets: transition.status.unwritable_plan_targets,

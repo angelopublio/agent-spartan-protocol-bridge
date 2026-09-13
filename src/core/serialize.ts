@@ -17,11 +17,13 @@ import {
   type ResolvedPolicy,
   type ReviewChainRecord,
   type ReviewerWriteRecord,
+  type RuntimeBuild,
   type StatusDocument,
   type TransitionEventDocument,
   type TransitionStatusDocument,
 } from "./contracts.ts";
 import { boundProducerRefusedPaths } from "./producer-refused-paths.ts";
+import { normalizeRuntimeBuild } from "../runtime/build-info.ts";
 
 export function sha256Bytes(bytes: Uint8Array | string): string {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -65,6 +67,7 @@ export function serializeStatus(status: StatusDocument): string {
     effort: status.effort,
     model_observed: status.model_observed,
     policy_digest: status.policy_digest,
+    runtime_build: serializeRuntimeBuild(status.runtime_build),
     artifact_hashes: serializeArtifactHashes(status.artifact_hashes),
     execution_id: status.execution_id,
     verdict: status.verdict,
@@ -96,6 +99,7 @@ export function serializeEvent(event: EventDocument): string {
     type: event.type,
     state: event.state,
     review_kind: event.review_kind,
+    emitting_build: serializeRuntimeBuild(event.emitting_build),
     policy_digest: event.policy_digest,
     artifact_hashes: serializeArtifactHashes(event.artifact_hashes),
     execution_id: event.execution_id,
@@ -198,7 +202,8 @@ function serializeReviewerWrite(record: ReviewerWriteRecord | null): ReviewerWri
 }
 
 export function parseStatusJson(text: string): StatusDocument {
-  return JSON.parse(text) as StatusDocument;
+  const parsed = JSON.parse(text) as StatusDocument;
+  return { ...parsed, runtime_build: serializeRuntimeBuild(parsed.runtime_build) };
 }
 
 export function serializeTransitionStatus(status: TransitionStatusDocument): string {
@@ -211,6 +216,7 @@ export function serializeTransitionStatus(status: TransitionStatusDocument): str
     task_path: status.task_path,
     approved_task_hash: status.approved_task_hash,
     policy_digest: status.policy_digest,
+    runtime_build: serializeRuntimeBuild(status.runtime_build),
     implementer_host: status.implementer_host,
     implementer_launcher_id: status.implementer_launcher_id,
     lock_identity: status.lock_identity,
@@ -234,6 +240,7 @@ export function serializeTransitionEvent(event: TransitionEventDocument): string
     transition_id: event.transition_id,
     type: event.type,
     state: event.state,
+    emitting_build: serializeRuntimeBuild(event.emitting_build),
     reason_code: event.reason_code,
     producer_diagnostic: serializeProducerDiagnostic(event.producer_diagnostic),
     unwritable_plan_targets: serializeUnwritablePlanTargets(event.unwritable_plan_targets),
@@ -248,6 +255,7 @@ export function parseTransitionStatusJson(text: string): TransitionStatusDocumen
   const diagnostic = parsed.producer_diagnostic;
   return {
     ...parsed,
+    runtime_build: serializeRuntimeBuild(parsed.runtime_build),
     producer_diagnostic: diagnostic === null || diagnostic === undefined
       ? null
       : {
@@ -259,6 +267,20 @@ export function parseTransitionStatusJson(text: string): TransitionStatusDocumen
     producer_refused_paths: serializeProducerRefusedPaths(parsed.producer_refused_paths),
     declaration_invalid_detail: serializeDeclarationInvalidDetail(parsed.declaration_invalid_detail),
   };
+}
+
+export function parseEventJson(text: string): EventDocument {
+  const parsed = JSON.parse(text) as EventDocument;
+  return { ...parsed, emitting_build: serializeRuntimeBuild(parsed.emitting_build) };
+}
+
+export function parseTransitionEventJson(text: string): TransitionEventDocument {
+  const parsed = JSON.parse(text) as TransitionEventDocument;
+  return { ...parsed, emitting_build: serializeRuntimeBuild(parsed.emitting_build) };
+}
+
+export function serializeRuntimeBuild(build: RuntimeBuild | null | undefined): RuntimeBuild | null {
+  return normalizeRuntimeBuild(build);
 }
 
 function serializeUnwritablePlanTargets(tokens: string[] | null | undefined): string[] | null {

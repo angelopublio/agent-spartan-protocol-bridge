@@ -1564,3 +1564,35 @@ four-digit `\\u` escape. Supplementary characters therefore become two surrogate
 escapes, and every quoted token remains one-line, printable ASCII, and
 JSON-round-trippable. Missing or malformed persisted values normalize to `null`;
 the additive document change keeps schema version 2.
+
+## D-078 — Consumer repositories run a pinned, stamped runtime (task 0083)
+
+**Decision:** On 2026-09-13, the supported consumer runtime became a globally
+installed package tarball built from a chosen checkout, rather than an `npm link`
+to the editable development tree. A developer can select the checkout build only
+through an operator-owned `PATH` shim in one shell; repository content and the
+portable skill's runtime-selection rule remain unchanged.
+
+`postbuild` now writes `dist/build-info.json` with the package version, Git commit
+and dirty state when Git is available, and the UTC build time. Status documents
+carry `runtime_build`, which names the invocation that created the run or
+transition. Event documents carry `emitting_build`, which names the invocation
+that appended that line. Missing or malformed records normalize to `null`, and
+the additive document fields keep schema version 2. The build record is not part
+of resolved policy or its digest.
+
+**Rationale:** Linking the global executable to this checkout made every consumer
+repository depend on the checkout's source/build freshness and could expose an
+in-progress development build after a rebuild. A packed install ships `dist/`
+without `src/`, fixing that coupling while the stamp retains an auditable build
+identity. Separate origin and emitter fields truthfully represent a run continued
+by a later invocation after the runtime has changed.
+
+**Consequence:** Editing this checkout no longer blocks or silently changes rounds
+in other repositories after the operator promotes the packed runtime. Operators
+can identify the selected executable with `spartan-bridge --version`, see the
+same rendering in `doctor` and the review's terminal opening line, and retain it
+on the persisted `Bridge run:` line. The opening line names the dispatching
+invocation; the artifact line and its `task_artifact_written` event name the
+writing invocation. Persisted status and event records separately attribute run
+creation and later event appenders.

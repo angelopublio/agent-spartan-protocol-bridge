@@ -13,6 +13,7 @@ import {
 } from "./adapters/fake.ts";
 import { createNodeProcessRunner } from "./adapters/process.ts";
 import type { AppDeps, Clock } from "./core/review.ts";
+import type { RuntimeBuild } from "./core/contracts.ts";
 import { RegistryUnavailableError, type RegistrySource } from "./policy/registry.ts";
 
 export function registryPathFromEnv(env: NodeJS.ProcessEnv): string {
@@ -49,7 +50,10 @@ export function createProductionClock(): Clock {
   };
 }
 
-export function createProductionDeps(env: NodeJS.ProcessEnv = process.env): AppDeps {
+export function createProductionDeps(
+  env: NodeJS.ProcessEnv = process.env,
+  runtimeBuild: RuntimeBuild | null = null,
+): AppDeps {
   const runner = createNodeProcessRunner();
   return {
     registry: createFileRegistrySource(env),
@@ -63,6 +67,7 @@ export function createProductionDeps(env: NodeJS.ProcessEnv = process.env): AppD
       ]),
     ),
     clock: createProductionClock(),
+    runtimeBuild,
   };
 }
 

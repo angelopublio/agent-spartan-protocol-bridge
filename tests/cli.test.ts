@@ -50,6 +50,8 @@ import { CursorAdapter, CURSOR_LAUNCHER_ID } from "../src/adapters/cursor.ts";
 import { createLauncherCatalog, FakeAdapter, fakeCapabilities } from "../src/adapters/fake.ts";
 import { formatReviewStreamLine } from "../src/adapters/review-stream.ts";
 import type { ProcessRunner } from "../src/adapters/process.ts";
+import { writeBuildStamp } from "../src/build/stamp.ts";
+import { formatRuntimeBuild, readRuntimeBuild } from "../src/runtime/build-info.ts";
 
 const cli = fileURLToPath(new URL("../src/cli/main.ts", import.meta.url));
 const PINNED_TZ = "America/Sao_Paulo";
@@ -64,6 +66,7 @@ const STARTED_INFO = {
   model: "Composer-2.5",
   effort: "none" as const,
   client_context: "personal",
+  runtime_build: null,
   created_at: STARTED_AT,
 };
 
@@ -329,6 +332,47 @@ test("help lists review status events doctor policy and mcp-stdio", async () => 
   assert.doesNotMatch(result.stdout, /\bstart\b/);
 });
 
+test("version prints one stamped build line and reports an absent stamp plainly", async () => {
+  const unstamped = await stagePackage({ src: false });
+  const unknown = await runCliWithModule(unstamped.buildFile, ["--version"]);
+  assert.equal(unknown.code, 0);
+  assert.equal(unknown.stdout, "spartan-bridge build unknown\n");
+
+  const build = {
+    version: "0.1.0",
+    commit: "a".repeat(40),
+    dirty: true,
+    built_at: "2026-09-13T06:00:00.000Z",
+  };
+  await fs.writeFile(path.join(unstamped.root, "dist", "build-info.json"), `${JSON.stringify(build)}\n`, "utf8");
+  const stamped = await runCliWithModule(unstamped.buildFile, ["-v"]);
+  assert.equal(stamped.code, 0);
+  assert.equal(
+    stamped.stdout,
+    `spartan-bridge version=0.1.0 commit=${"a".repeat(40)} dirty=true built_at=2026-09-13T06:00:00.000Z\n`,
+  );
+  assert.equal(stamped.stdout.trim().split("\n").length, 1);
+  await fs.rm(unstamped.root, { recursive: true, force: true });
+});
+
+test("build stamping succeeds outside Git and writes only dist build metadata", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-build-stamp-"));
+  await fs.writeFile(path.join(root, "package.json"), '{"version":"9.8.7"}\n', "utf8");
+  const build = await writeBuildStamp(root);
+  assert.equal(build.version, "9.8.7");
+  assert.equal(build.commit, null);
+  assert.equal(build.dirty, null);
+  assert.match(build.built_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(await readRuntimeBuild(root), build);
+  assert.deepEqual((await fs.readdir(root)).sort(), ["dist", "package.json"]);
+
+  const stampSource = await fs.readFile(new URL("../src/build/stamp.ts", import.meta.url), "utf8");
+  assert.equal(stampSource.match(/GIT_OPTIONAL_LOCKS: "0"/g)?.length, 1);
+  assert.match(stampSource, /git\(\["rev-parse", "HEAD"\]/);
+  assert.match(stampSource, /git\(\["status", "--porcelain"\]/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("CLI runs when invoked through a bin symlink", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spartan-bridge-bin-"));
   const link = path.join(dir, "spartan-bridge");
@@ -404,7 +448,7 @@ test("production CLI fake returns human_required and persists events", async () 
   const tracker: LocalDayTracker = { lastDayKey: start.dayKey };
   assert.equal(
     result.stderr,
-    `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal\n${formatReviewTerminalLine(status, tracker)}`,
+    `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n${formatReviewTerminalLine(status, tracker)}`,
   );
   assert.doesNotMatch(result.stderr, /^elapsed /m);
   assert.doesNotMatch(result.stderr, /quiet /);
@@ -917,7 +961,7 @@ test("quiet ticker stops on thrown review bodies and never starts when review_st
   assert.equal(thrownTimer.cleared, true);
   assert.equal(
     thrown.text(),
-    "16/08 09:00:00 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal\n",
+    "16/08 09:00:00 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n",
   );
 
   const skipped = captureStream(true);
@@ -961,7 +1005,7 @@ test("review stderr order on a TTY is resolved, quiet, then terminal", async () 
     const start = localDateTime(Date.parse(status.created_at));
     const tracker: LocalDayTracker = { lastDayKey: start.dayKey };
     const expected = [
-      `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal`,
+      `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown`,
       `${formatAlignedPrefix(ticks.originMs + 10_000, tracker)}quiet 10s`,
       `${formatAlignedPrefix(ticks.originMs + 20_000, tracker)}quiet 20s`,
       formatReviewTerminalLine(status, tracker).trimEnd(),
@@ -1047,7 +1091,7 @@ test("review stderr off a TTY omits quiet lines", async () => {
     const tracker: LocalDayTracker = { lastDayKey: start.dayKey };
     assert.equal(
       stderr.text(),
-      `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal\n${formatReviewTerminalLine(status, tracker)}`,
+      `${start.date} ${start.time} review ${status.run_id} host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n${formatReviewTerminalLine(status, tracker)}`,
     );
     assert.doesNotMatch(stderr.text(), /elapsed |quiet /);
     assert.doesNotMatch(stderr.text(), new RegExp(STALE_BUILD_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -1557,7 +1601,7 @@ test("header and terminal derive local strings from status timestamps under pinn
   };
   assert.equal(
     formatReviewStartedLine(info),
-    "19/08 06:15:49 review run-a421fd20-0000-4000-8000-000000000000 host=cursor model=Composer-2.5 effort=none client-context=personal\n",
+    "19/08 06:15:49 review run-a421fd20-0000-4000-8000-000000000000 host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n",
   );
   assert.equal(
     formatProducerStartedLine({
@@ -1571,7 +1615,7 @@ test("header and terminal derive local strings from status timestamps under pinn
   );
   assert.equal(
     formatImplementationReviewStartedLine(info),
-    "19/08 06:15:49 implementation review run-a421fd20-0000-4000-8000-000000000000 host=cursor model=Composer-2.5 effort=none client-context=personal\n",
+    "19/08 06:15:49 implementation review run-a421fd20-0000-4000-8000-000000000000 host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n",
   );
   const status = {
     created_at: OWNER_CREATED_AT,
@@ -1679,6 +1723,21 @@ test("header and terminal derive local strings from status timestamps under pinn
   assert.equal("19/08 06:15:49 ".length - "06:15:49 ".length, 6);
 });
 
+test("review opening lines use the shared runtime build rendering", () => {
+  const runtimeBuild = {
+    version: "0.1.0",
+    commit: "b".repeat(40),
+    dirty: false,
+    built_at: "2026-09-13T06:00:00.000Z",
+  };
+  const rendering = formatRuntimeBuild(runtimeBuild);
+  assert.equal(formatReviewStartedLine({ ...STARTED_INFO, runtime_build: runtimeBuild }).includes(rendering), true);
+  assert.equal(
+    formatImplementationReviewStartedLine({ ...STARTED_INFO, runtime_build: runtimeBuild }).includes(rendering),
+    true,
+  );
+});
+
 test("date reprints on the first line after the local day changes", () => {
   const beforeMidnight = Date.parse("2026-08-17T02:59:50.000Z");
   const tty = captureStream(true);
@@ -1695,7 +1754,7 @@ test("date reprints on the first line after the local day changes", () => {
   const header = formatReviewStartedLine({ ...STARTED_INFO, created_at: created });
   assert.equal(
     header,
-    "16/08 23:59:50 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal\n",
+    "16/08 23:59:50 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown\n",
   );
   const sameDay: LocalDayTracker = { lastDayKey: localDateTime(Date.parse(created)).dayKey };
   const status = {
@@ -1721,7 +1780,7 @@ test("quiet ticker with no stream records is measured from the run start", async
   assert.equal(outcome.status?.reason_code, "review_passed");
   assert.match(
     tty.text(),
-    /^16\/08 09:00:00 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal$/m,
+    /^16\/08 09:00:00 review run-11111111-1111-4111-8111-111111111111 host=cursor model=Composer-2.5 effort=none client-context=personal spartan-bridge build unknown$/m,
   );
   assert.match(tty.text(), /^ {6}09:00:10 quiet 10s$/m);
   assert.match(tty.text(), /^ {6}09:00:20 quiet 20s$/m);

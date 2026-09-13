@@ -34,6 +34,7 @@ const EVENT_KEYS = [
   "type",
   "state",
   "review_kind",
+  "emitting_build",
   "policy_digest",
   "artifact_hashes",
   "execution_id",
