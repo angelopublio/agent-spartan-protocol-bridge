@@ -6,7 +6,6 @@
     "dist/**",
     "agent-skill/**",
     ".agents/plugins/marketplace.json",
-    "docs/**",
     "README.md",
     "LICENSE",
     "SECURITY.md",

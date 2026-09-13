@@ -1,10 +1,11 @@
 # Runtime promotion
 
 Consumer repositories should run a packed, globally installed Bridge build. The
-installed package contains `dist/` but not `src/`, so edits in this development
-checkout neither make the consumer runtime stale nor change code beneath an
-in-flight round. Every promoted build carries its package version, Git commit
-when available, dirty state, and build time in `dist/build-info.json`.
+installed package contains `dist/` but neither `src/` nor `docs/`, so edits in
+this development checkout neither make the consumer runtime stale nor change
+code beneath an in-flight round. Every promoted build carries its package
+version, Git commit when available, dirty state, and build time in
+`dist/build-info.json`.
 
 ## Promote a pinned runtime
 
