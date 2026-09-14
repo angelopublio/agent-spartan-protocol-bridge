@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -38,11 +40,17 @@ import test from "node:test";
 // only of periods is sentence punctuation, anything else is treated as a longer
 // address and reported, even where a human would read it otherwise.
 //
-// A finding names a position in the tracked listing and a count, never a blob
-// identifier, a tracked path, a filename or the matched value. A blob
-// identifier is derived from content; a position is not. The test runner adds
-// its own framing around a finding — this file's path, source lines, the
-// assertion message — and that framing is public content.
+// The scan reads both the index and tracked paths as Git would stage their
+// working copies. It never opens a tracked path itself: Git records a symlink's
+// target string as its blob and drops a tracked path hidden below a directory
+// symlink, so content beyond either link is never followed. Where this checkout
+// has no repository metadata of its own, only the four repository scans skip.
+//
+// A finding names a position in one tracked listing and a count, never a blob
+// identifier, a tracked path, a filename or the matched value. A blob identifier
+// is derived from content; a position is not. The test runner adds its own
+// framing around a finding — this file's path, source lines, the assertion
+// message — and that framing is public content.
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
@@ -51,29 +59,102 @@ const PLACEHOLDER_TILDE_SEGMENTS = new Set(["src", "build"]);
 const ALLOWED_ADDRESSES = new Set(["t@t.invalid"]);
 const PUBLIC_CLIENT_CONTEXTS = new Set(["personal", "default"]);
 
-type Entry = { readonly index: number; readonly blob: string; readonly file: string; readonly text: string };
+type ListingName = "index" | "working-copy";
+type Entry = {
+  readonly listing: ListingName;
+  readonly index: number;
+  readonly mode: string;
+  readonly blob: string;
+  readonly file: string;
+  readonly text: string;
+};
+type Listings = { readonly index: Entry[]; readonly workingCopy: Entry[] };
+type GitOptions = { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv };
 
-function git(args: readonly string[], input?: string): Buffer {
-  const result = spawnSync("git", args, { cwd: REPO_ROOT, input, maxBuffer: 512 * 1024 * 1024 });
+const FIXTURE_GIT_ENVIRONMENT_NAMES = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+] as const;
+
+const IDENTITY_SCAN_SKIP_REASON = "no repository metadata at this checkout's root; the identity scan did not run.";
+const STAGING_GUIDANCE =
+  "an index entry clears only once the corrected file is staged, and a new file is scanned only once it is tracked.";
+
+type RepositoryProbe =
+  | { readonly kind: "ready" }
+  | { readonly kind: "absent" }
+  | { readonly kind: "error"; readonly message: string };
+
+function repositoryProbe(): RepositoryProbe {
+  try {
+    lstatSync(path.join(REPO_ROOT, ".git"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { kind: "absent" };
+    }
+    return { kind: "error", message: "the repository-metadata entry must be inspectable" };
+  }
+
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: REPO_ROOT,
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  if (result.error) {
+    return { kind: "error", message: "the repository-root probe must spawn" };
+  }
+  if (result.status !== 0) {
+    return { kind: "error", message: "the repository-root probe must succeed" };
+  }
+  try {
+    if (realpathSync(result.stdout.toString("utf8").trim()) !== realpathSync(REPO_ROOT)) {
+      return { kind: "error", message: "the repository-root probe must resolve to this checkout's root" };
+    }
+  } catch {
+    return { kind: "error", message: "the repository-root probe must resolve to this checkout's root" };
+  }
+  return { kind: "ready" };
+}
+
+const REPOSITORY_PROBE = repositoryProbe();
+
+function git(args: readonly string[], input?: string | Buffer, options: GitOptions = {}): Buffer {
+  const result = spawnSync("git", args, {
+    cwd: options.cwd ?? REPO_ROOT,
+    env: options.env,
+    input,
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  assert.equal(result.error, undefined, `git ${args[0]} must spawn`);
   assert.equal(result.status, 0, `git ${args[0]} must succeed`);
   return result.stdout;
 }
 
-/**
- * Read every tracked entry from the index and its bytes from the object
- * database. The working filesystem is never consulted, so a symlink is read as
- * the blob holding its target rather than followed out of the repository.
- */
-function trackedEntries(): Entry[] {
-  const rows = git(["ls-files", "-s", "-z"]).toString("utf8").split("\0").filter((row) => row.length > 0);
+/** Read one Git index listing and its blobs without opening a tracked path. */
+function readListing(root: string, listing: ListingName, rowsBuffer: Buffer, env?: NodeJS.ProcessEnv): Entry[] {
+  const rows = rowsBuffer.toString("utf8").split("\0").filter((row) => row.length > 0);
   const parsed = rows.map((row, index) => {
     // `<mode> <sha> <stage>\t<path>`; a path may itself contain a tab, so split
     // once on the first separator rather than on every one.
     const tab = row.indexOf("\t");
     const meta = row.slice(0, tab === -1 ? row.length : tab);
-    return { index, blob: meta.split(" ")[1] ?? "", file: tab === -1 ? "" : row.slice(tab + 1) };
+    const fields = meta.split(" ");
+    return {
+      listing,
+      index,
+      mode: fields[0] ?? "",
+      blob: fields[1] ?? "",
+      file: tab === -1 ? "" : row.slice(tab + 1),
+    };
   });
-  const out = git(["cat-file", "--batch"], `${parsed.map((entry) => entry.blob).join("\n")}\n`);
+  const out = git(
+    ["cat-file", "--batch"],
+    `${parsed.map((entry) => entry.blob).join("\n")}\n`,
+    { cwd: root, env },
+  );
 
   const entries: Entry[] = [];
   let cursor = 0;
@@ -86,28 +167,99 @@ function trackedEntries(): Entry[] {
   return entries;
 }
 
-let cached: Entry[] | null = null;
-function entries(): Entry[] {
-  cached ??= trackedEntries();
+/**
+ * Read the real index, then stage tracked working-copy changes into a temporary
+ * index and object directory. The set and bytes of files under the repository's
+ * Git directories, and the worktree status, remain unchanged. Git may refresh
+ * the timestamp of an existing loose object whose bytes it re-derives.
+ */
+function trackedListings(root: string = REPO_ROOT, baseEnv?: NodeJS.ProcessEnv): Listings {
+  const indexRows = git(["ls-files", "-s", "-z"], undefined, { cwd: root, env: baseEnv });
+  const index = readListing(root, "index", indexRows, baseEnv);
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "repo-hygiene-"));
+  try {
+    const indexFile = path.join(temporaryDirectory, "index");
+    const objectDirectory = path.join(temporaryDirectory, "objects");
+    mkdirSync(objectDirectory);
+    const repositoryObjects = git(["rev-parse", "--git-path", "objects"], undefined, { cwd: root, env: baseEnv })
+      .toString("utf8")
+      .trim();
+    const env = {
+      ...(baseEnv ?? process.env),
+      GIT_INDEX_FILE: indexFile,
+      GIT_OBJECT_DIRECTORY: objectDirectory,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: path.resolve(root, repositoryObjects),
+    };
+    git(["update-index", "-z", "--index-info"], indexRows, { cwd: root, env });
+    git(["add", "-u"], undefined, { cwd: root, env });
+    const workingRows = git(["ls-files", "-s", "-z"], undefined, { cwd: root, env });
+    return { index, workingCopy: readListing(root, "working-copy", workingRows, env) };
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+function distinctEntries(listings: Listings): Entry[] {
+  const indexed = new Set(listings.index.map((entry) => `${entry.file}\0${entry.blob}`));
+  return [
+    ...listings.index,
+    ...listings.workingCopy.filter((entry) => !indexed.has(`${entry.file}\0${entry.blob}`)),
+  ];
+}
+
+let cached: Listings | null = null;
+function listings(): Listings {
+  cached ??= trackedListings();
   return cached;
 }
 
+function entries(): Entry[] {
+  return distinctEntries(listings());
+}
+
 /** Name where to look without naming what was found, or what holds it. */
-function locate(entry: Entry): string {
-  return `tracked entry ${entry.index} of ${entries().length}`;
+function locate(entry: Entry, source: Listings = listings()): string {
+  const count = entry.listing === "index" ? source.index.length : source.workingCopy.length;
+  return `${entry.listing} entry ${entry.index} of ${count}`;
 }
 
 /** Every assertion scans a tracked pathname and its blob alike: a name is content. */
-function scan(matcher: (subject: string) => boolean): string[] {
+function scanListings(source: Listings, matcher: (subject: string) => boolean): string[] {
   const offenders: string[] = [];
-  for (const entry of entries()) {
+  for (const entry of distinctEntries(source)) {
     for (const subject of [entry.file, entry.text]) {
       if (matcher(subject)) {
-        offenders.push(locate(entry));
+        offenders.push(locate(entry, source));
       }
     }
   }
   return [...new Set(offenders)];
+}
+
+function scan(matcher: (subject: string) => boolean): string[] {
+  return scanListings(listings(), matcher);
+}
+
+/** Keep a throwaway repository independent of the caller's Git context. */
+function fixtureGitEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...source };
+  for (const name of FIXTURE_GIT_ENVIRONMENT_NAMES) {
+    delete env[name];
+  }
+  return env;
+}
+
+function identityScan(name: string, body: () => void): void {
+  if (REPOSITORY_PROBE.kind === "absent") {
+    test(name, { skip: IDENTITY_SCAN_SKIP_REASON }, body);
+    return;
+  }
+  test(name, () => {
+    if (REPOSITORY_PROBE.kind === "error") {
+      assert.fail(REPOSITORY_PROBE.message);
+    }
+    body();
+  });
 }
 
 export function homePathOffends(subject: string): boolean {
@@ -180,28 +332,35 @@ export function aliasOffends(subject: string): boolean {
   return false;
 }
 
-test("an absolute home path names a placeholder user", () => {
-  assert.deepEqual(scan(homePathOffends), [], "replace the real home path with a placeholder user");
-});
-
-test("a tilde path names a dotfile", () => {
+identityScan("an absolute home path names a placeholder user", () => {
   assert.deepEqual(
-    scan(tildePathOffends),
+    scan(homePathOffends),
     [],
-    "a `~` path in this repository names a dotfile; a personal working directory does not",
+    `replace the real home path with a placeholder user. ${STAGING_GUIDANCE}`,
   );
 });
 
-test("an e-mail address is the synthetic one", () => {
-  assert.deepEqual(scan(addressOffends), [], "use t@t.invalid instead of a real address");
+identityScan("a tilde path names a dotfile", () => {
+  assert.deepEqual(
+    scan(tildePathOffends),
+    [],
+    `a \`~\` path in this repository names a dotfile; a personal working directory does not. ${STAGING_GUIDANCE}`,
+  );
 });
 
-test("a client-context alias is one of the two public values", () => {
+identityScan("an e-mail address is the synthetic one", () => {
+  assert.deepEqual(
+    scan(addressOffends),
+    [],
+    `use t@t.invalid instead of a real address. ${STAGING_GUIDANCE}`,
+  );
+});
+
+identityScan("a client-context alias is one of the two public values", () => {
   const offenders = scan(aliasOffends);
   // This repository's own Agent hosts table, whose Client context column selects
   // the launcher these bindings actually use.
-  const agents = entries().find((entry) => entry.file === "AGENTS.md");
-  if (agents) {
+  for (const agents of entries().filter((entry) => entry.file === "AGENTS.md")) {
     const table = /^## Agent hosts$[\s\S]*?(?=^## )/m.exec(agents.text)?.[0] ?? "";
     for (const row of table.split("\n")) {
       const cells = row.split("|").map((cell) => cell.trim());
@@ -216,7 +375,7 @@ test("a client-context alias is one of the two public values", () => {
   assert.deepEqual(
     [...new Set(offenders)],
     [],
-    "a client-context alias in repository content is `personal` or `default`",
+    `a client-context alias in repository content is \`personal\` or \`default\`. ${STAGING_GUIDANCE}`,
   );
 });
 
@@ -286,3 +445,99 @@ for (const [name, judge, cases] of [
     }
   });
 }
+
+test("tracked listings include unstaged changes without following symlinks", () => {
+  const base = mkdtempSync(path.join(os.tmpdir(), "repo-hygiene-fixture-"));
+  try {
+    const redirect = path.join(base, "inherited-git-context");
+    const env = fixtureGitEnvironment({
+      ...process.env,
+      GIT_DIR: redirect,
+      GIT_WORK_TREE: redirect,
+      GIT_INDEX_FILE: redirect,
+      GIT_OBJECT_DIRECTORY: redirect,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: redirect,
+      GIT_COMMON_DIR: redirect,
+    });
+    for (const name of FIXTURE_GIT_ENVIRONMENT_NAMES) {
+      assert.equal(env[name], undefined);
+    }
+    const root = path.join(base, "repo");
+    const outside = path.join(base, "outside");
+    mkdirSync(root);
+    mkdirSync(outside);
+
+    const marker = ["identity", "scan", "marker"].join("-");
+    const unstagedMarker = `${marker}-unstaged`;
+    const stagedMarker = `${marker}-staged`;
+    const unchangedMarker = `${marker}-unchanged`;
+    const outsideMarker = `${marker}-outside`;
+    const files = {
+      unstaged: path.join(root, "unstaged.txt"),
+      staged: path.join(root, "staged.txt"),
+      unchanged: path.join(root, "unchanged.txt"),
+      linked: path.join(root, "linked.txt"),
+      nestedDirectory: path.join(root, "nested"),
+      nested: path.join(root, "nested", "hidden.txt"),
+    };
+    const outsideFile = path.join(outside, "hidden.txt");
+
+    mkdirSync(files.nestedDirectory);
+    writeFileSync(files.unstaged, "clean\n");
+    writeFileSync(files.staged, "clean\n");
+    writeFileSync(files.unchanged, `${unchangedMarker}\n`);
+    writeFileSync(files.linked, "clean\n");
+    writeFileSync(files.nested, "clean\n");
+    writeFileSync(outsideFile, `${outsideMarker}\n`);
+    git(["init", "-q"], undefined, { cwd: root, env });
+    git(["add", "--", "."], undefined, { cwd: root, env });
+
+    writeFileSync(files.unstaged, `${unstagedMarker}\n`);
+    writeFileSync(files.staged, `${stagedMarker}\n`);
+    git(["add", "--", "staged.txt"], undefined, { cwd: root, env });
+    writeFileSync(files.staged, "clean\n");
+    rmSync(files.linked);
+    symlinkSync(outsideFile, files.linked);
+    rmSync(files.nestedDirectory, { recursive: true });
+    symlinkSync(outside, files.nestedDirectory);
+
+    const source = trackedListings(root, env);
+    const indexUnstaged = source.index.find((entry) => entry.file === "unstaged.txt");
+    const workingUnstaged = source.workingCopy.find((entry) => entry.file === "unstaged.txt");
+    assert.ok(indexUnstaged);
+    assert.ok(workingUnstaged);
+    assert.equal(indexUnstaged.text.includes(unstagedMarker), false);
+    assert.equal(workingUnstaged.text.includes(unstagedMarker), true);
+    assert.deepEqual(scanListings(source, (subject) => subject.includes(unstagedMarker)), [
+      locate(workingUnstaged, source),
+    ]);
+    assert.match(locate(workingUnstaged, source), /^working-copy entry \d+ of \d+$/);
+
+    const indexStaged = source.index.find((entry) => entry.file === "staged.txt");
+    const workingStaged = source.workingCopy.find((entry) => entry.file === "staged.txt");
+    assert.ok(indexStaged);
+    assert.ok(workingStaged);
+    assert.equal(indexStaged.text.includes(stagedMarker), true);
+    assert.equal(workingStaged.text.includes(stagedMarker), false);
+    assert.deepEqual(scanListings(source, (subject) => subject.includes(stagedMarker)), [locate(indexStaged, source)]);
+
+    const unchanged = distinctEntries(source).filter((entry) => entry.file === "unchanged.txt");
+    assert.equal(unchanged.length, 1);
+    const unchangedEntry = unchanged[0];
+    assert.ok(unchangedEntry);
+    assert.equal(unchangedEntry.listing, "index");
+    assert.deepEqual(scanListings(source, (subject) => subject.includes(unchangedMarker)), [
+      locate(unchangedEntry, source),
+    ]);
+
+    const linked = source.workingCopy.find((entry) => entry.file === "linked.txt");
+    assert.ok(linked);
+    assert.equal(linked.mode, "120000");
+    assert.equal(linked.text, outsideFile);
+    assert.equal(linked.text.includes(outsideMarker), false);
+    assert.equal(source.workingCopy.some((entry) => entry.file === "nested/hidden.txt"), false);
+    assert.deepEqual(scanListings(source, (subject) => subject.includes(outsideMarker)), []);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});

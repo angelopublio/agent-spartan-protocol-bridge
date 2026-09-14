@@ -1619,3 +1619,41 @@ repository scan fail, including when one is someone's real directory, because
 that identifies a working habit rather than a person or project. Named working
 directories, nested paths, unknown segments, and tokens that continue past the
 one permitted escape residue remain findings.
+
+## D-080 — The identity scan reads the index and tracked working-copy state (task 0081)
+
+**Decision:** On 2026-09-13, the private-identity hygiene check began scanning
+two Git listings: the repository index and a second index populated from it and
+updated with `git add -u` in a temporary index and object directory. Git, not
+the test file, reads tracked working-copy paths. A symlink is therefore scanned
+as its target string, while a tracked path hidden below a directory symlink is
+absent; neither link is followed for content. Equal path-and-blob pairs are
+scanned only from the index listing.
+
+A tracked edit no longer has to be staged before the suite can report it. An
+index finding remains until its correction is staged, and a new file remains
+outside the scan until it is tracked; every scan failure states both limits.
+The check remains in the test suite rather than adding a commit hook. At a
+checkout root with no `.git` entry, the four repository scans skip with an
+explicit reason. A present but unusable or mismatched `.git` entry fails them.
+
+**Rationale:** The prior index-only scan could report a newly introduced
+identity only after it entered history, while directly reading working-tree
+files would follow links and weaken the established security boundary. Git's
+staging behavior exposes the tracked working state before commit without
+changing what is considered tracked. A run leaves the set and bytes of files
+under the repository's Git directories, and the worktree status, unchanged.
+Git may refresh the timestamp of an existing loose object when it re-derives
+bytes already present through the alternate object directory; that bounded
+refresh is accepted because it changes neither repository content nor the
+index, refs, configuration, or worktree. A suite run remains reproducible
+without relying on clone-local hook configuration.
+Throwaway repository coverage removes repository-selecting `GIT_*` variables
+from its environment so a caller's Git context cannot redirect fixture operations
+into the live repository.
+
+**Consequence:** The same suite invocation sees unstaged edits to tracked
+paths, preserves staged findings that a plain commit would write, and leaves
+untracked files outside its claim. Isolated producer copies no longer report
+four misleading failures solely because repository metadata was intentionally
+omitted; their skipped count makes clear that no identity scan ran.
