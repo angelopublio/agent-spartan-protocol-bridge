@@ -1,12 +1,13 @@
 # Agent Spartan Protocol Bridge
 
 > [!IMPORTANT]
-> **Retired.** The Bridge is no longer maintained and receives no fixes. Its job, moving [Agent Spartan Protocol](https://github.com/angelopublio/agent-spartan-protocol) handoffs between coding agents, is now done by **[Agent Spartan Protocol Relay](https://github.com/angelopublio/agent-spartan-protocol-relay)**, which drives the agents' own interactive sessions in [herdr](https://herdr.dev) so you can watch and answer each one.
+> **Retired.** The Bridge is no longer maintained and receives no fixes. Its job, moving [Agent Spartan Protocol](https://github.com/angelopublio/agent-spartan-protocol) handoffs between coding agents, is now done by **[Agent Spartan Protocol Relay](https://github.com/angelopublio/agent-spartan-protocol-relay)**, which drives the agents' own interactive sessions in a terminal multiplexer so you can watch and answer each one.
 >
 > To move a repository over: the relay reads the same `## Agent hosts` table unchanged. Follow [Coming from the Bridge](https://github.com/angelopublio/agent-spartan-protocol-relay#coming-from-the-bridge), then remove the Bridge runtime (`npm uninstall -g spartan-bridge`) and its `spbridge` skill links.
 >
+> Known limitations at retirement stay recorded as open tasks under [`spartan/tasks/`](spartan/tasks/). Among them, producer isolation was never finished: a producer can write outside its workspace ([0088](spartan/tasks/0088-a-producer-can-write-anywhere-under-home.md)) and reach the network ([0089](spartan/tasks/0089-a-producer-has-unrestricted-network-access.md)), so it is no more contained than running the agent's own CLI directly.
+>
 > The code below stays available, read-only, for reference.
-
 
 The human subscribed to several AI assistants — and was still the messenger.
 
