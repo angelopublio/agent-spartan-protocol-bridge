@@ -1,5 +1,13 @@
 # Agent Spartan Protocol Bridge
 
+> [!IMPORTANT]
+> **Retired.** The Bridge is no longer maintained and receives no fixes. Its job, moving [Agent Spartan Protocol](https://github.com/angelopublio/agent-spartan-protocol) handoffs between coding agents, is now done by **[Agent Spartan Protocol Relay](https://github.com/angelopublio/agent-spartan-protocol-relay)**, which drives the agents' own interactive sessions in [herdr](https://herdr.dev) so you can watch and answer each one.
+>
+> To move a repository over: the relay reads the same `## Agent hosts` table unchanged. Follow [Coming from the Bridge](https://github.com/angelopublio/agent-spartan-protocol-relay#coming-from-the-bridge), then remove the Bridge runtime (`npm uninstall -g spartan-bridge`) and its `spbridge` skill links.
+>
+> The code below stays available, read-only, for reference.
+
+
 The human subscribed to several AI assistants — and was still the messenger.
 
 One planned. Another reviewed the plan. A third could implement, if its usage allowance had not run out. Another reviewed the implementation. Which host took which role was specific to each working repository. When a host's allowance ran out, the human adjusted the bindings.
